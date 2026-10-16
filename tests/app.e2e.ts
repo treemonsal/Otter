@@ -67,7 +67,6 @@ test('Transkript, Notizen, Aufgaben und belegte Suche bleiben nach Neustart erha
   await page.getByRole('button', { name: 'Favorit umschalten' }).click();
   await page.reload();
   await expect(page.getByText('Projektgespräch Zürich', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: /Projektgespräch Zürich/ }).click();
   await expect(page.getByLabel('Gesprächsordner')).toHaveValue('Arbeit');
   await expect(page.getByRole('button', { name: 'Favorit umschalten' })).toHaveAttribute(
     'aria-pressed',
@@ -119,6 +118,7 @@ test('Audioimport und vollständige ZIP-Sicherung inklusive sicherer Wiederherst
   await expect(page.locator('.setting-select select')).toHaveValue('french');
   await expect(page.getByRole('checkbox', { name: /Lokales Whisper erlauben/ })).not.toBeChecked();
   await page.reload();
+  await page.getByRole('button', { name: 'Übersicht', exact: true }).click();
   await expect(page.locator('.meeting-card')).toHaveCount(1);
   await page.locator('.meeting-main').click();
   await expect(page.locator('audio')).toBeVisible();
@@ -132,6 +132,13 @@ test('Aufnehmen, pausieren, speichern und Original wiedergeben', async ({ page, 
   await context.grantPermissions(['microphone']);
   await page.getByRole('button', { name: 'Aufnahme starten', exact: true }).click();
   await expect(page.getByText('Aufnahme läuft', { exact: true })).toBeVisible();
+  await expect
+    .poll(async () =>
+      Number(
+        await page.getByRole('meter', { name: 'Mikrofonpegel' }).getAttribute('aria-valuenow'),
+      ),
+    )
+    .toBeGreaterThan(0);
   await page.waitForTimeout(1300);
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await expect(page.getByText('Aufnahme pausiert', { exact: true })).toBeVisible();
@@ -146,8 +153,6 @@ test('Aufnehmen, pausieren, speichern und Original wiedergeben', async ({ page, 
     .poll(() => page.locator('audio').evaluate((el: HTMLAudioElement) => el.currentTime))
     .toBeGreaterThan(0);
   await page.reload();
-  await expect(page.locator('.meeting-card')).toHaveCount(1);
-  await page.locator('.meeting-main').click();
   await expect(page.locator('audio')).toBeVisible();
 });
 test('Offline-Neustart, Suche und Export funktionieren ohne Server', async ({ page, context }) => {
@@ -163,6 +168,7 @@ test('Offline-Neustart, Suche und Export funktionieren ohne Server', async ({ pa
   });
   await context.setOffline(true);
   await page.reload();
+  await page.getByRole('button', { name: 'Zurück', exact: true }).click();
   await expect(page.locator('.meeting-card')).toHaveCount(1);
   await page.getByRole('textbox', { name: 'Gespräche durchsuchen' }).fill('3000');
   await expect(page.locator('.meeting-card')).toHaveCount(1);
@@ -224,6 +230,7 @@ test('Fehlerhafte Dateien verändern keine vorhandenen Gespräche', async ({ pag
   });
   await expect(page.locator('.busy-overlay')).toHaveCount(0);
   await page.reload();
+  await page.getByRole('button', { name: 'Übersicht', exact: true }).click();
   await expect(page.locator('.meeting-card')).toHaveCount(1);
   await page.locator('input[type=file][accept^="audio"]').setInputFiles({
     name: 'kaputt.wav',
@@ -243,4 +250,201 @@ test('Zugängliche Namen und Kontraste in Startseite, Dialog und Transkript', as
   await page.getByRole('button', { name: 'Schliessen', exact: true }).click();
   await textNote(page);
   expect((await scan()).violations).toEqual([]);
+});
+
+test('Verlauf, Neuladen und Tastatur-Navigation erhalten die Gesprächsansicht', async ({
+  page,
+}) => {
+  await textNote(page);
+  const url = page.url();
+  await page.getByRole('tab', { name: 'Transkript', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Überblick' })).toBeFocused();
+  await expect(page.getByRole('tab', { name: 'Überblick' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.reload();
+  await expect(page.getByRole('tab', { name: 'Überblick' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Deine Gespräche.' })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole('tab', { name: 'Überblick' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  expect(page.url()).not.toBe(url);
+  await page.getByRole('tab', { name: 'Notizen', exact: true }).click();
+  await page.getByRole('button', { name: 'Notiz schreiben' }).click();
+  await page.getByRole('textbox', { name: 'Notizen', exact: true }).fill('Noch nicht gespeichert');
+  page.once('dialog', (d) => d.dismiss());
+  await page.goBack();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Notizen', exact: true })).toHaveValue(
+    'Noch nicht gespeichert',
+  );
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Abbrechen', exact: true }).click();
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Deine Gespräche.' })).toBeVisible();
+});
+
+test('Ordner umbenennen und entfernen erhält alle Gespräche', async ({ page }) => {
+  await textNote(page);
+  await page.getByLabel('Gesprächsordner').selectOption('Arbeit');
+  await page.getByRole('button', { name: 'Einstellungen öffnen' }).click();
+  await page.getByRole('button', { name: 'Ordner Arbeit umbenennen' }).click();
+  await page.getByLabel('Ordnername').fill('Projekt Zürich');
+  await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await page.getByRole('button', { name: 'Übersicht', exact: true }).click();
+  await page.locator('.meeting-main').click();
+  await expect(page.getByLabel('Gesprächsordner')).toHaveValue('Projekt Zürich');
+  await expect(page.locator('.segment-body')).toContainText('3000 Franken');
+  await page.getByRole('button', { name: 'Einstellungen öffnen' }).click();
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Ordner Projekt Zürich entfernen' }).click();
+  await page.getByRole('button', { name: 'Übersicht', exact: true }).click();
+  await expect(page.locator('.meeting-card')).toHaveCount(1);
+  await page.locator('.meeting-main').click();
+  await expect(page.getByLabel('Gesprächsordner')).toHaveValue('');
+  await expect(page.locator('.segment-body')).toContainText('3000 Franken');
+});
+
+test('Parallele Fenster überschreiben keine offenen Notizen', async ({ page, context }) => {
+  await textNote(page);
+  await page.getByRole('tab', { name: 'Notizen', exact: true }).click();
+  const other = await context.newPage();
+  await other.goto(page.url());
+  await page.getByRole('button', { name: 'Notiz schreiben' }).click();
+  await page
+    .getByRole('textbox', { name: 'Notizen', exact: true })
+    .fill('Mein noch offener Entwurf');
+  await other.getByRole('button', { name: 'Notiz schreiben' }).click();
+  await other
+    .getByRole('textbox', { name: 'Notizen', exact: true })
+    .fill('Im zweiten Fenster gespeichert');
+  await other.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await expect(other.locator('.notes-text')).toHaveText('Im zweiten Fenster gespeichert');
+  await page.bringToFront();
+  await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
+    'anderen Fenster geändert',
+  );
+  await expect(page.getByRole('textbox', { name: 'Notizen', exact: true })).toHaveValue(
+    'Mein noch offener Entwurf',
+  );
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Abbrechen', exact: true }).click();
+  await expect(page.locator('.notes-text')).toHaveText('Im zweiten Fenster gespeichert');
+  await other.close();
+});
+
+test('Passwortgeschützte Sicherung ist auf einem neuen Gerät wiederherstellbar', async ({
+  page,
+  browser,
+}) => {
+  await textNote(page);
+  await page.getByRole('button', { name: 'Einstellungen öffnen' }).click();
+  await page.getByRole('button', { name: 'Passwortgeschützte Sicherung', exact: true }).click();
+  await page.getByLabel('Passwort', { exact: true }).fill('Sicheres Testpasswort 2026');
+  await page.getByLabel('Passwort wiederholen').fill('Sicheres Testpasswort 2026');
+  const downloading = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Verschlüsselt exportieren' }).click();
+  const file = await downloading;
+  const path = (await file.path())!;
+  expect(file.suggestedFilename()).toMatch(/\.murmur$/);
+  const fresh = await browser.newContext({ viewport: page.viewportSize()! });
+  try {
+    const device = await fresh.newPage();
+    await device.goto('http://127.0.0.1:4173/Otter/');
+    await device.locator('input[type=file][accept^=".zip"]').setInputFiles(path);
+    await device.getByLabel('Passwort', { exact: true }).fill('Falsches Passwort');
+    await device.getByRole('button', { name: 'Entsperren', exact: true }).click();
+    await expect(device.getByRole('alert')).toContainText('Passwort falsch');
+    await device.getByLabel('Passwort', { exact: true }).fill('Sicheres Testpasswort 2026');
+    device.once('dialog', (d) => d.accept());
+    await device.getByRole('button', { name: 'Entsperren', exact: true }).click();
+    await expect(device.locator('.meeting-card')).toHaveCount(1);
+    await device.locator('.meeting-main').click();
+    await expect(device.locator('.segment-body')).toContainText('3000 Franken');
+    await device.getByRole('button', { name: 'Einstellungen öffnen' }).click();
+    await expect(
+      device.getByRole('checkbox', { name: /Lokales Whisper erlauben/ }),
+    ).not.toBeChecked();
+  } finally {
+    await fresh.close();
+  }
+});
+
+test('Versionsprüfung schützt auch ohne rechtzeitige Fenstermeldung', async ({ page, context }) => {
+  await textNote(page);
+  await page.getByRole('tab', { name: 'Notizen', exact: true }).click();
+  await page.evaluate(() =>
+    document.addEventListener(
+      'visibilitychange',
+      (event) => event.stopImmediatePropagation(),
+      true,
+    ),
+  );
+  const other = await context.newPage();
+  // Simulate a background browser that does not deliver BroadcastChannel notifications.
+  await other.addInitScript(() => {
+    (window as any).BroadcastChannel = class {
+      postMessage() {}
+      addEventListener() {}
+      removeEventListener() {}
+    };
+  });
+  await other.goto(page.url());
+  await page.getByRole('button', { name: 'Notiz schreiben' }).click();
+  await page.getByRole('textbox', { name: 'Notizen', exact: true }).fill('Offener Entwurf');
+  await other.getByRole('button', { name: 'Notiz schreiben' }).click();
+  await other
+    .getByRole('textbox', { name: 'Notizen', exact: true })
+    .fill('Neueste gespeicherte Fassung');
+  await other.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await expect(other.locator('.notes-text')).toHaveText('Neueste gespeicherte Fassung');
+  await page.bringToFront();
+  await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
+    'anderen Fenster geändert',
+  );
+  await expect(page.getByRole('textbox', { name: 'Notizen', exact: true })).toHaveValue(
+    'Offener Entwurf',
+  );
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Abbrechen', exact: true }).click();
+  await expect(page.locator('.notes-text')).toHaveText('Neueste gespeicherte Fassung');
+  await other.close();
+});
+
+test('Speicherfehler rollen sichtbare Änderungen zurück und zeigen keinen Erfolg', async ({
+  page,
+}) => {
+  await textNote(page);
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args: Parameters<typeof original>) {
+      if (this.name === 'meetings') {
+        IDBObjectStore.prototype.put = original;
+        throw new DOMException('Test: full disk', 'QuotaExceededError');
+      }
+      return original.apply(this, args);
+    };
+  });
+  await page.getByRole('button', { name: 'Favorit umschalten' }).click();
+  await expect(page.getByRole('alert')).toContainText('Speichern fehlgeschlagen');
+  await expect(page.getByRole('button', { name: 'Favorit umschalten' })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Favorit umschalten' })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await expect(page.locator('.segment-body')).toContainText('3000 Franken');
 });

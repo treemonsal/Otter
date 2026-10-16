@@ -3,12 +3,14 @@
 Stand: 16. Oktober 2026. Cloud-Linux, Node.js 24.19.0, Chromium 154.
 
 - Produktionsbuild mit TypeScript und Vite erfolgreich; PWA-Manifest, Icons und Service Worker erstellt.
-- Acht Datentests: unveränderte Quellenzitate, Aufgabenvorschläge, Treffer ohne erfundene Antworten, SRT-Rundungsgrenzen, Audio-/Metadaten-Roundtrip, Einstellungen ohne Modellfreigabe sowie Ablehnung fremder oder beschädigter ZIP-Dateien.
-- 16 Browserprüfungen auf Desktop und in iPhone-13-Emulation: Eingaben und Persistenz, Originalaudioimport, ZIP-Wiederherstellung und wiederholte Wiederherstellung ohne Duplikate, Spracheinstellungen, Aufnahme/Pause/Wiedergabe mit Testmikrofon, Offline-Neustart, Offline-Suche und -Export, Schutz ungespeicherter Änderungen, beschädigte Dateien und reduzierte Bewegung.
+- 13 Datentests: unveränderte Quellenzitate, Aufgabenvorschläge, Treffer ohne erfundene Antworten, SRT-Rundungsgrenzen, Audio-/Metadaten-Roundtrip, Einstellungen ohne Modellfreigabe, Ablehnung fremder oder beschädigter ZIP-Dateien, doppelte IDs, Suchnormalisierung, Audioformate sowie Verschlüsselung, falsche Passwörter und manipulierte Sicherungen.
+- 28 Browserprüfungen auf Desktop und in iPhone-13-Emulation: Eingaben und Persistenz, Originalaudioimport, ZIP-Wiederherstellung und wiederholte Wiederherstellung ohne Duplikate, Spracheinstellungen, Aufnahme/Pause/Wiedergabe mit Testmikrofon, Offline-Neustart, Offline-Suche und -Export, Schutz ungespeicherter Änderungen, beschädigte Dateien und reduzierte Bewegung. Zusätzlich: Ordner umbenennen/entfernen, Browser-Verlauf und Tastaturregister, echte Mikrofonpegelmessung mit einer festgelegten Testtondatei, parallele Fenster mit und ohne Änderungsbenachrichtigung, Quota-Fehler mit Rücknahme optimistischer Änderungen sowie passwortgeschützte Sicherung und Wiederherstellung in einem neuen Browserprofil.
 - Ansichten mit 320, 375, 390 und 430 Pixeln Breite auf horizontalen Überlauf geprüft.
 - Axe-Prüfungen nach WCAG 2 A/AA und 2.1 AA auf Startseite, Importdialog und Transkript ohne gemeldete Verstösse. Das ist keine vollständige manuelle Barrierefreiheitszertifizierung.
-- Echte Whisper-tiny-Inferenz mit einer öffentlichen elfsekündigen JFK-Sprachaufnahme: „ask not what your country can do for you …“ erkannt. Neuer Worker verarbeitet dieselbe Aufnahme auch offline aus dem Modellcache. Es werden ausschliesslich Modell-Dateien angefordert; kein Audio-/Text-Upload.
+- Echte Whisper-tiny-Inferenz mit einer öffentlichen elfsekündigen JFK-Sprachaufnahme: „ask not what your country can do for you …“ erkannt. Neuer Worker verarbeitet dieselbe Aufnahme auch offline aus dem Modellcache und erhält währenddessen manuell bearbeitete Texte. Dies wurde erneut nach der Umstellung auf bedarfsweises Laden und versionierte Sprachlaufzeit-Dateien geprüft. Es werden ausschliesslich Modell-Dateien angefordert; kein Audio-/Text-Upload.
 - Abhängigkeiten mit `npm audit` geprüft: keine bekannten gemeldeten Schwachstellen zum Prüfzeitpunkt.
+
+Die vorab gespeicherten App-Dateien wurden von rund 14,5 MiB auf 0,91 MiB reduziert. Die grosse WASM-Datei wird erst bei der freigegebenen Transkription geladen und von Transformers.js für spätere Offline-Nutzung gespeichert.
 
 ## Besonderheiten des Modelltests
 

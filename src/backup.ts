@@ -30,7 +30,10 @@ export async function backup(
         : {}),
     }),
   );
-  return new Blob([zipSync(files, { level: 0 }) as Uint8Array<ArrayBuffer>], {
+  const archive = zipSync(files, { level: 0 });
+  if (archive.length >= MAX)
+    throw new Error('Die Sicherung überschreitet die sichere Dateigrösse von 512 MB.');
+  return new Blob([archive as Uint8Array<ArrayBuffer>], {
     type: 'application/zip',
   });
 }
@@ -43,7 +46,7 @@ function assert(
 const safeText = (x: unknown, max = 1000000): x is string =>
   typeof x === 'string' && x.length <= max;
 const time = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
-export async function readBackup(
+async function parseBackup(
   file: File,
 ): Promise<{ meetings: Meeting[]; preferences?: Pick<Settings, 'language' | 'folders'> }> {
   assert(file.size < MAX, 'Die Sicherung darf höchstens 512 MB gross sein.');
@@ -91,6 +94,8 @@ export async function readBackup(
         Array.isArray(m.tasks) &&
         m.tasks.length <= 10000,
     );
+    assert(new Set(m.segments.map((s: any) => s.id)).size === m.segments.length);
+    assert(new Set(m.tasks.map((t: any) => t.id)).size === m.tasks.length);
     assert(
       m.segments.every(
         (s: any) =>
@@ -118,6 +123,17 @@ export async function readBackup(
     } as Meeting;
   });
   return { meetings, preferences: data.preferences };
+}
+export async function readBackup(file: File) {
+  try {
+    return await parseBackup(file);
+  } catch (error) {
+    if (error instanceof Error && /^(Die Sicherung|Die entpackte Sicherung)/.test(error.message))
+      throw error;
+    throw new Error(
+      'Die Sicherung ist beschädigt oder hat ein unbekanntes Format. Vorhandene Gespräche bleiben unverändert.',
+    );
+  }
 }
 export function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);

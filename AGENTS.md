@@ -11,3 +11,7 @@
 - Changes to backup/restore must keep existing IDs unchanged and reject malformed input before any writes.
 - Test model inference with `npm run test:model` when touching transcription/runtime integration. It requires the preview server and public model access.
 - Avoid credentials in code, logs, saved configuration and commits.
+
+- Preserve atomic expected-version checks for meeting writes and atomic folder changes. Broadcast notifications are an optimisation, not the conflict-safety mechanism.
+- Password-protected backups use the versioned authenticated envelope in encryption.ts; never persist passwords, reduce its key derivation, or replace crypto with custom obfuscation. Keep ZIP v1 restoration compatible.
+- ONNX assets are versioned by the installed runtime. Keep the large WASM file out of eager precaching; verify fresh-worker offline inference after changing these paths.

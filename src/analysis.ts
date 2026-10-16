@@ -21,11 +21,24 @@ const stopwords = new Set(
     ' ',
   ),
 );
+export function normalizeSearch(text: string) {
+  return text.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase('de').replace(/ß/g, 'ss');
+}
+export function matchesSearch(text: string, query: string) {
+  const value = normalizeSearch(text);
+  return normalizeSearch(query)
+    .trim()
+    .split(/\s+/)
+    .every((word) => value.includes(word));
+}
 function tokens(text: string) {
   return (
     text
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
       .toLocaleLowerCase('de')
-      .match(/[\p{L}\p{N}]{3,}/gu)
+      .replace(/ß/g, 'ss')
+      .match(/[\p{L}\p{N}]{2,}|[0-9]+/gu)
       ?.filter((w) => !stopwords.has(w)) || []
   );
 }
@@ -66,7 +79,7 @@ export function findEvidence(segments: Segment[], query: string) {
   return segments
     .map((s) => ({
       segment: s,
-      score: words.filter((w) => s.text.toLocaleLowerCase('de').includes(w)).length,
+      score: words.filter((w) => normalizeSearch(s.text).includes(w)).length,
     }))
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score)

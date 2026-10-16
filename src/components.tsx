@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useId, type ReactNode } from 'react';
 import { X, Pause, Play, Square, Mic, Download } from 'lucide-react';
 import { clock } from './analysis';
-import { recorderType, MAX_AUDIO_BYTES } from './audio';
+import { recorderType, MAX_AUDIO_BYTES, audioExtension } from './audio';
 import { newMeeting, type Meeting } from './types';
-import { saveMeeting } from './db';
+import { saveRecording } from './db';
 import { download } from './backup';
 export function Wave({ small = false }: { small?: boolean }) {
   return (
@@ -61,7 +61,7 @@ export function Recorder({
   onComplete,
   onCancel,
 }: {
-  onComplete: (m: Meeting) => void;
+  onComplete: (m: Meeting, reason?: string) => void;
   onCancel: () => void;
 }) {
   const [status, setStatus] = useState<'starting' | 'recording' | 'paused' | 'saving' | 'error'>(
@@ -69,34 +69,98 @@ export function Recorder({
   );
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState('');
+  const [level, setLevel] = useState<number | null>(null);
+  const [bars, setBars] = useState<number[]>(Array(35).fill(3));
+  const [awake, setAwake] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const audioRef = useRef<Blob | null>(null);
   const stopped = useRef(false);
   const cancelled = useRef(false);
+  const running = useRef(false);
+  const reason = useRef('');
+  const started = useRef(false);
+  const active = useRef(0);
+  const since = useRef(0);
+  const meter = useRef<AudioContext | null>(null);
+  const frame = useRef(0);
   const meeting = useRef(
     newMeeting(
       `Gespräch · ${new Intl.DateTimeFormat('de-CH', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }).format(new Date())}`,
     ),
   );
-  const active = useRef(0);
-  const since = useRef(Date.now());
-  const started = useRef(false);
   const latest = useRef({ onComplete, onCancel });
   latest.current = { onComplete, onCancel };
   const elapsed = () =>
-    active.current +
-    (recorder.current?.state === 'recording' ? (Date.now() - since.current) / 1000 : 0);
+    active.current + (running.current ? (Date.now() - since.current) / 1000 : 0);
+  function freeze() {
+    active.current = elapsed();
+    running.current = false;
+  }
+  function releaseMeter() {
+    cancelAnimationFrame(frame.current);
+    if (meter.current?.state !== 'closed') void meter.current?.close().catch(() => {});
+  }
+  function stop(message = '') {
+    const rec = recorder.current;
+    if (!rec || rec.state === 'inactive') return;
+    reason.current = message;
+    freeze();
+    stopped.current = true;
+    setStatus('saving');
+    rec.stop();
+  }
+  async function startMeter(input: MediaStream) {
+    try {
+      const context = new AudioContext();
+      meter.current = context;
+      const source = context.createMediaStreamSource(input);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      const silentOutput = context.createGain();
+      silentOutput.gain.value = 0;
+      analyser.connect(silentOutput);
+      silentOutput.connect(context.destination);
+      await context.resume();
+      if (context.state !== 'running') return;
+      const samples = new Float32Array(analyser.fftSize);
+      let last = 0;
+      const sample = (now: number) => {
+        if (context.state === 'closed') return;
+        if (now - last > 100) {
+          last = now;
+          analyser.getFloatTimeDomainData(samples);
+          const rms = Math.sqrt(
+            samples.reduce((sum, value) => sum + value * value, 0) / samples.length,
+          );
+          setLevel(rms);
+          setBars(
+            Array.from({ length: 35 }, (_, i) => {
+              const part = samples.subarray(i * 29, (i + 1) * 29);
+              const power = Math.sqrt(
+                part.reduce((sum, value) => sum + value * value, 0) / part.length,
+              );
+              return Math.max(3, Math.min(45, power * 220));
+            }),
+          );
+        }
+        frame.current = requestAnimationFrame(sample);
+      };
+      frame.current = requestAnimationFrame(sample);
+    } catch {
+      setLevel(null);
+    }
+  }
   useEffect(() => {
     let disposed = false;
-    // Delay one microtask so React StrictMode's test mount never requests a second microphone.
     queueMicrotask(async () => {
       if (disposed || started.current) return;
       started.current = true;
       try {
         if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder)
           throw new Error(
-            'Aufnahme wird in diesem Browser nicht unterstützt. Öffne die App über HTTPS in Safari oder Chrome, oder importiere Audio.',
+            'Aufnahme wird in diesem Browser nicht unterstützt. Verwende Safari oder Chrome über HTTPS, oder importiere Audio.',
           );
         const input = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true },
@@ -122,38 +186,46 @@ export function Recorder({
           const snapshot = {
             ...meeting.current,
             audio: blob,
-            duration: Math.max(active.current, elapsed()),
+            duration: elapsed(),
             updatedAt: Date.now(),
           };
-          meeting.current = snapshot;
           pending = pending
             .then(async () => {
-              await saveMeeting(snapshot);
+              meeting.current = await saveRecording(snapshot);
             })
             .catch(() => {
               setError(
-                'Zwischenspeichern fehlgeschlagen. Stoppe die Aufnahme und lade sie direkt herunter.',
+                'Zwischenspeichern fehlgeschlagen. Die Aufnahme wird gestoppt; bei Bedarf kannst du das Audio direkt herunterladen.',
               );
+              stop('Aufnahme wegen eines Speicherfehlers gestoppt.');
             });
-          if (blob.size >= MAX_AUDIO_BYTES && rec.state !== 'inactive') stop();
+          if (blob.size >= MAX_AUDIO_BYTES)
+            stop('Dateigrössenlimit erreicht. Die Aufnahme wurde gespeichert.');
         };
         rec.onstop = async () => {
+          // A browser/device interruption can stop MediaRecorder without calling our stop().
+          if (running.current) {
+            freeze();
+            reason.current ||= 'Aufnahme unterbrochen. Vorhandenes Audio wurde gespeichert.';
+          }
+          stopped.current = true;
+          setStatus('saving');
           input.getTracks().forEach((t) => t.stop());
+          releaseMeter();
           await pending;
           if (!audioRef.current?.size) {
             setError('Es wurde kein Audio aufgenommen. Bitte prüfe die Mikrofonfreigabe.');
             setStatus('error');
             return;
           }
-          const complete = {
-            ...meeting.current,
-            audio: audioRef.current,
-            duration: active.current,
-            updatedAt: Date.now(),
-          };
           try {
-            await saveMeeting(complete);
-            latest.current.onComplete(complete);
+            const complete = await saveRecording({
+              ...meeting.current,
+              audio: audioRef.current,
+              duration: active.current,
+              updatedAt: Date.now(),
+            });
+            latest.current.onComplete(complete, reason.current);
           } catch {
             setError(
               'Der Gerätespeicher ist voll oder gesperrt. Deine Aufnahme ist noch hier. Lade sie jetzt herunter.',
@@ -161,19 +233,24 @@ export function Recorder({
             setStatus('error');
           }
         };
-        rec.onerror = () => {
-          setError(
-            'Die Aufnahme wurde vom Browser unterbrochen. Vorhandenes Audio wird gesichert.',
-          );
-          if (rec.state !== 'inactive') stop();
-        };
+        rec.onerror = () =>
+          stop('Die Aufnahme wurde vom Browser unterbrochen. Vorhandenes Audio wurde gespeichert.');
+        input.getAudioTracks().forEach((track) =>
+          track.addEventListener('ended', () => {
+            if (!stopped.current)
+              stop('Das Mikrofon wurde getrennt. Vorhandenes Audio wurde gespeichert.');
+          }),
+        );
         since.current = Date.now();
+        running.current = true;
         rec.start(4000);
         setStatus('recording');
+        void startMeter(input);
       } catch (e) {
-        const name = (e as DOMException).name;
+        stream.current?.getTracks().forEach((t) => t.stop());
+        releaseMeter();
         setError(
-          name === 'NotAllowedError'
+          (e as DOMException).name === 'NotAllowedError'
             ? 'Kein Mikrofonzugriff. Erlaube das Mikrofon in den Website-Einstellungen und versuche es erneut.'
             : e instanceof Error
               ? e.message
@@ -184,43 +261,73 @@ export function Recorder({
     });
     return () => {
       disposed = true;
+      stream.current?.getTracks().forEach((t) => t.stop());
+      releaseMeter();
     };
   }, []);
   useEffect(() => {
     const timer = setInterval(() => {
       const time = elapsed();
       setSeconds(time);
-      if (time >= 3600 && recorder.current?.state === 'recording') stop();
+      if (time >= 3600 && running.current)
+        stop('60-Minuten-Limit erreicht. Die Aufnahme wurde gespeichert.');
     }, 250);
-    const warn = (e: BeforeUnloadEvent) => {
-      if (!stopped.current && recorder.current) {
-        e.preventDefault();
-        e.returnValue = '';
+    const warn = (event: BeforeUnloadEvent) => {
+      if (
+        (!stopped.current && recorder.current) ||
+        status === 'saving' ||
+        (status === 'error' && audioRef.current)
+      ) {
+        event.preventDefault();
+        event.returnValue = '';
       }
     };
-    window.addEventListener('beforeunload', warn);
+    addEventListener('beforeunload', warn);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('beforeunload', warn);
+      removeEventListener('beforeunload', warn);
     };
-  }, []);
-  function stop() {
-    const rec = recorder.current;
-    if (!rec || rec.state === 'inactive') return;
-    active.current = elapsed();
-    stopped.current = true;
-    setStatus('saving');
-    rec.stop();
-  }
+  }, [status]);
+  useEffect(() => {
+    if (status !== 'recording') {
+      setAwake(false);
+      return;
+    }
+    let disposed = false;
+    let lock: WakeLockSentinel | undefined;
+    const acquire = async () => {
+      if (document.visibilityState !== 'visible' || disposed || (lock && !lock.released)) return;
+      try {
+        const requested = await navigator.wakeLock?.request('screen');
+        if (disposed) {
+          await requested?.release();
+          return;
+        }
+        lock = requested;
+        setAwake(!!lock);
+        lock?.addEventListener('release', () => setAwake(false));
+      } catch {
+        setAwake(false);
+      }
+    };
+    void acquire();
+    document.addEventListener('visibilitychange', acquire);
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', acquire);
+      void lock?.release().catch(() => {});
+    };
+  }, [status]);
   function pause() {
     const rec = recorder.current;
     if (!rec) return;
     if (rec.state === 'recording') {
-      active.current = elapsed();
+      freeze();
       rec.pause();
       setStatus('paused');
     } else if (rec.state === 'paused') {
       since.current = Date.now();
+      running.current = true;
       rec.resume();
       setStatus('recording');
     }
@@ -232,7 +339,13 @@ export function Recorder({
     } else if (status === 'starting') {
       cancelled.current = true;
       latest.current.onCancel();
-    } else latest.current.onCancel();
+    } else if (
+      !audioRef.current ||
+      confirm(
+        'Hast du die Aufnahme heruntergeladen? Beim Schliessen geht das noch nicht gespeicherte Audio verloren.',
+      )
+    )
+      latest.current.onCancel();
   };
   return (
     <Modal title="Neue Aufnahme" onClose={close}>
@@ -252,22 +365,46 @@ export function Recorder({
                   ? 'Wird sicher gespeichert …'
                   : 'Aufnahme nicht verfügbar'}
         </p>
-        <div className="live-wave" aria-hidden="true">
-          {Array.from({ length: 35 }, (_, i) => (
-            <i
-              key={i}
-              style={{
-                height: `${10 + Math.sin(i * 3.1) ** 2 * 34}px`,
-                animationDelay: `${i * 0.07}s`,
-                animationPlayState: status === 'recording' ? 'running' : 'paused',
-              }}
-            />
+        <div
+          className="live-wave measured"
+          role="meter"
+          aria-label="Mikrofonpegel"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={
+            status === 'recording' && level !== null ? Math.min(100, Math.round(level * 300)) : 0
+          }
+          aria-valuetext={
+            level === null
+              ? 'Pegelmessung nicht verfügbar'
+              : status === 'paused'
+                ? 'Pausiert'
+                : level < 0.002
+                  ? 'Sehr leises Signal'
+                  : 'Signal empfangen'
+          }
+        >
+          {bars.map((height, i) => (
+            <i key={i} style={{ height: status === 'recording' ? height : 3, animation: 'none' }} />
           ))}
         </div>
+        <p className="meter-caption">
+          {status === 'recording'
+            ? level === null
+              ? 'Pegelmessung nicht verfügbar'
+              : level < 0.002
+                ? 'Sehr leises Signal · bitte Mikrofon prüfen'
+                : 'Mikrofonsignal empfangen'
+            : status === 'paused'
+              ? 'Mikrofonaufnahme pausiert'
+              : 'Gemessener Mikrofonpegel'}
+        </p>
         <p className="muted small-text">
-          Bitte hole vor der Aufnahme das Einverständnis aller Beteiligten ein. Lass die App
-          geöffnet und den Bildschirm an. Die Wellen zeigen den Aufnahmestatus, keinen gemessenen
-          Pegel.
+          Bitte hole das Einverständnis aller Beteiligten ein.{' '}
+          {awake
+            ? 'Der Bildschirm wird während der Aufnahme wach gehalten.'
+            : 'Lass den Bildschirm eingeschaltet.'}{' '}
+          Lass die App im Vordergrund; mobile Browser können Hintergrundaufnahmen unterbrechen.
         </p>
         {error && (
           <p role="alert" className="error-box">
@@ -280,7 +417,7 @@ export function Recorder({
               {status === 'paused' ? <Play size={18} /> : <Pause size={18} />}
               {status === 'paused' ? 'Fortsetzen' : 'Pause'}
             </button>
-            <button className="primary" onClick={stop}>
+            <button className="primary" onClick={() => stop()}>
               <Square size={16} fill="currentColor" />
               Speichern
             </button>
@@ -292,10 +429,7 @@ export function Recorder({
               <button
                 className="primary"
                 onClick={() =>
-                  download(
-                    audioRef.current!,
-                    `Aufnahme.${audioRef.current!.type.includes('mp4') ? 'm4a' : 'webm'}`,
-                  )
+                  download(audioRef.current!, `Aufnahme.${audioExtension(audioRef.current!.type)}`)
                 }
               >
                 <Download size={18} />

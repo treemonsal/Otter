@@ -5,3 +5,5 @@ declare module 'virtual:pwa-register' {
     onOfflineReady?: () => void;
   }): (reloadPage?: boolean) => Promise<void>;
 }
+
+declare const __ORT_VERSION__: string;

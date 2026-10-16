@@ -118,3 +118,65 @@ describe('vollständige Sicherungen', () => {
     await expect(readBackup(file)).rejects.toThrow();
   });
 });
+
+describe('kritische Verbesserungen', () => {
+  it('findet Akzente, Schweizer Schreibweisen, kurze Begriffe und mehrere Suchwörter', async () => {
+    const { matchesSearch } = await import('../src/analysis');
+    expect(
+      matchesSearch('Zürich: Das große Budget, 3000 Franken. Freitag.', 'zurich freitag 3000'),
+    ).toBe(true);
+    expect(matchesSearch('Straße Zürich', 'strasse zurich')).toBe(true);
+    expect(matchesSearch('Zürich', 'zurich budget')).toBe(false);
+    expect(
+      findEvidence([{ ...segments[0], text: 'Die IT ist in Zürich.' }], 'IT Zürich'),
+    ).toHaveLength(1);
+  });
+  it('schützt Audio und Text mit authentifizierter Verschlüsselung; Passwörter werden nicht exportiert', async () => {
+    const { encryptBackup, decryptBackup, isEncryptedBackup } = await import('../src/encryption');
+    const password = 'Mein langes Testpasswort 2026';
+    const encrypted = await encryptBackup(await backup([meeting]), password);
+    expect(await isEncryptedBackup(encrypted)).toBe(true);
+    expect(new TextDecoder().decode(await encrypted.arrayBuffer())).not.toContain(
+      'Nicht verlieren',
+    );
+    expect(new TextDecoder().decode(await encrypted.arrayBuffer())).not.toContain(password);
+    const result = await readBackup(await decryptBackup(encrypted, password));
+    expect(result.meetings[0].notes).toBe('Nicht verlieren');
+    expect(await result.meetings[0].audio!.arrayBuffer()).toEqual(
+      await meeting.audio!.arrayBuffer(),
+    );
+    await expect(decryptBackup(encrypted, 'Ein falsches Passwort')).rejects.toThrow(
+      'Passwort falsch',
+    );
+    const bytes = new Uint8Array(await encrypted.arrayBuffer());
+    bytes[bytes.length - 1] ^= 1;
+    await expect(decryptBackup(new Blob([bytes]), password)).rejects.toThrow('Passwort falsch');
+    await expect(encryptBackup(new Blob(['Text']), 'kurz')).rejects.toThrow('12 Zeichen');
+    expect(await isEncryptedBackup(new Blob(['ZIP']))).toBe(false);
+  });
+  it('weist doppelte Textstellen- und Aufgaben-IDs in einer Sicherung zurück', async () => {
+    for (const record of [
+      { ...meeting, segments: [segments[0], segments[0]] },
+      { ...meeting, tasks: [meeting.tasks[0], meeting.tasks[0]] },
+    ]) {
+      const blob = await backup([record]);
+      await expect(readBackup(new File([blob], 'duplicate.zip'))).rejects.toThrow();
+    }
+  });
+});
+
+it('unterscheidet Downloadlimits, Offline-Speicher, Zugriffsprobleme und zu wenig Arbeitsspeicher', async () => {
+  const { transcriptionError } = await import('../src/transcription-errors');
+  expect(transcriptionError('HTTP 429')).toContain('begrenzt');
+  expect(transcriptionError('Failed to fetch', false)).toContain('Offline-Speicher');
+  expect(transcriptionError('403 Forbidden')).toContain('verweigert');
+  expect(transcriptionError('out of memory')).toContain('Arbeitsspeicher');
+});
+
+it('erhält die Audioformate bei fehlendem MIME-Typ und beim Export von AAC/M4A', async () => {
+  const { audioMimeType, audioExtension } = await import('../src/audio');
+  expect(audioMimeType('', 'Sitzung.wav')).toBe('audio/wav');
+  expect(audioMimeType('', 'Sitzung.aac')).toBe('audio/aac');
+  expect(audioExtension('audio/aac')).toBe('aac');
+  expect(audioExtension('audio/x-m4a')).toBe('m4a');
+});

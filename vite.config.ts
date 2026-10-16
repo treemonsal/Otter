@@ -1,8 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { readFileSync } from 'node:fs';
 import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig({
   base: '/Otter/',
+  define: {
+    __ORT_VERSION__: JSON.stringify(
+      JSON.parse(
+        readFileSync(
+          new URL('./node_modules/onnxruntime-web/package.json', import.meta.url),
+          'utf8',
+        ),
+      ).version,
+    ),
+  },
   plugins: [
     react(),
     VitePWA({
@@ -32,7 +43,7 @@ export default defineConfig({
         // Model files are stored by Transformers.js in its own browser cache after consent.
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        globIgnores: ['assets/*.wasm'],
+        globIgnores: ['assets/*.wasm', 'ort/**/*.wasm'],
       },
     }),
   ],

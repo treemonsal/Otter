@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 export default defineConfig({
   testDir: './tests',
@@ -14,7 +15,11 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     launchOptions: {
       ...(existsSync('/usr/bin/chromium') ? { executablePath: '/usr/bin/chromium' } : {}),
-      args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+      args: [
+        '--use-fake-ui-for-media-stream',
+        '--use-fake-device-for-media-stream',
+        `--use-file-for-fake-audio-capture=${resolve('tests/fixtures/microphone-tone.wav')}`,
+      ],
     },
   },
   projects: [

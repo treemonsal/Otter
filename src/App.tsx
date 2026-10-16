@@ -13,7 +13,6 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   ChevronRight,
-  MoreHorizontal,
   Download,
   Trash2,
   Pencil,
@@ -22,16 +21,12 @@ import {
   FileText,
   ListTodo,
   MessageSquare,
-  Pause,
-  Square,
-  Globe,
   HardDrive,
   Smartphone,
   CircleCheck,
   LoaderCircle,
   RotateCcw,
   Headphones,
-  ArrowDownToLine,
   FolderPlus,
   Clock3,
   LockKeyhole,
@@ -59,10 +54,15 @@ import {
   toSrt,
 } from './analysis';
 import { backup, readBackup, download, safeName } from './backup';
-import { decodeAudio, MAX_AUDIO_BYTES } from './audio';
+import { decodeAudio, MAX_AUDIO_BYTES, audioExtension, audioMimeType } from './audio';
 import { Modal, Recorder, Wave } from './components';
-type Page = 'home' | 'all' | 'starred' | 'folders' | 'tasks' | 'trash' | 'settings';
-type Tab = 'transcript' | 'summary' | 'tasks' | 'notes' | 'ask';
+import { useNavigation, type Page, type Tab } from './navigation';
+import { changeFolder, subscribeChanges, ConflictError } from './db';
+import { encryptBackup, decryptBackup, isEncryptedBackup } from './encryption';
+import { PasswordDialog } from './PasswordDialog';
+import { transcriptionError } from './transcription-errors';
+import { matchesSearch } from './analysis';
+import { Info, CircleAlert, LockKeyhole as BackupLock } from 'lucide-react';
 type Edit = {
   title: string;
   fields: { key: string; label: string; value: string; multiline?: boolean; max?: number }[];
@@ -86,6 +86,13 @@ const icons: Record<Page, typeof Home> = {
   trash: Trash2,
   settings: SettingsIcon,
 };
+function preference(key: string, fallback: string) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
 const sizeLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 export default function App() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
@@ -93,13 +100,20 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [loaded, setLoaded] = useState(false);
   const [fatal, setFatal] = useState('');
-  const [page, setPage] = useState<Page>('home');
-  const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('transcript');
+  const navigationGuard = useRef<() => boolean>(() => true);
+  const editorDirty = useRef(false);
+  const { route, go, close: closeMeeting } = useNavigation(navigationGuard);
+  const { page, selected, tab } = route;
+  const setTab = (next: Tab) => go((old) => ({ ...old, tab: next }), true);
   const [query, setQuery] = useState('');
-  const [folder, setFolder] = useState(() => localStorage.getItem('murmur-folder') || '');
-  const [order, setOrder] = useState(() => localStorage.getItem('murmur-order') || 'newest');
-  const [toast, setToast] = useState('');
+  const [folder, setFolder] = useState(() => preference('murmur-folder', ''));
+  const [order, setOrder] = useState(() => preference('murmur-order', 'newest'));
+  const [toast, setToast] = useState<{
+    message: string;
+    kind: 'info' | 'success' | 'error';
+  } | null>(null);
+  const [encryptedExport, setEncryptedExport] = useState(false);
+  const [encryptedImport, setEncryptedImport] = useState<File | null>(null);
   const [recording, setRecording] = useState(false);
   const [importing, setImporting] = useState(false);
   const [consentFor, setConsentFor] = useState<string | null>(null);
@@ -131,12 +145,40 @@ export default function App() {
   const savePending = useRef(0);
   const alive = useRef(true);
   function publish(list: Meeting[]) {
-    current.current = list;
-    setMeetings(list);
+    const stable = list.map((m) => {
+      const old = current.current.find((item) => item.id === m.id);
+      if (
+        old?.audio &&
+        m.audio &&
+        old.audio.size === m.audio.size &&
+        old.audio.type === m.audio.type &&
+        old.duration === m.duration
+      )
+        return { ...m, audio: old.audio };
+      return m;
+    });
+    current.current = stable;
+    setMeetings(stable);
   }
-  function notify(message: string) {
-    setToast(message);
+  function notify(message: string, kind: 'info' | 'success' | 'error' = 'info') {
+    setToast({ message, kind });
   }
+  navigationGuard.current = () => {
+    if (recording || working || savePending.current) {
+      notify('Bitte beende zuerst die laufende Aufnahme oder Dateiverarbeitung.');
+      return false;
+    }
+    if (editing && editorDirty.current && !confirm('Ungespeicherte Änderungen verwerfen?'))
+      return false;
+    setEditing(null);
+    setImporting(false);
+    setConsentFor(null);
+    setExportFor(null);
+    setInstall(false);
+    setEncryptedExport(false);
+    setEncryptedImport(null);
+    return true;
+  };
   useEffect(() => {
     alive.current = true;
     Promise.all([allMeetings(), getSettings()])
@@ -165,15 +207,50 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
+    const refresh = async () => {
+      if (savePending.current) return;
+      const [list, preferences] = await Promise.all([allMeetings(), getSettings()]);
+      if (alive.current && !savePending.current) {
+        publish(list);
+        setSettings(preferences);
+      }
+    };
+    const unsubscribe = subscribeChanges(() => {
+      void refresh().catch(() => {});
+    });
+    const visible = () => {
+      if (document.visibilityState === 'visible') void refresh().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      unsubscribe();
+      document.removeEventListener('visibilitychange', visible);
+    };
+  }, []);
+  useEffect(() => {
+    if (loaded && selected && !meetings.some((m) => m.id === selected)) {
+      go({ ...route, selected: null }, true);
+      notify('Dieses Gespräch ist auf diesem Gerät nicht mehr verfügbar.');
+    }
+  }, [loaded, meetings, selected]);
+  useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(''), 5500);
+    const timer = setTimeout(() => setToast(null), toast.kind === 'error' ? 12000 : 5500);
     return () => clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
-    localStorage.setItem('murmur-folder', folder);
+    try {
+      localStorage.setItem('murmur-folder', folder);
+    } catch {
+      /* Core data is stored independently in IndexedDB. */
+    }
   }, [folder]);
   useEffect(() => {
-    localStorage.setItem('murmur-order', order);
+    try {
+      localStorage.setItem('murmur-order', order);
+    } catch {
+      /* The filter remains usable without browser preferences. */
+    }
   }, [order]);
   useEffect(() => {
     navigator.storage
@@ -202,31 +279,38 @@ export default function App() {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [processing, working]);
-  async function mutate(id: string, fn: (m: Meeting) => Meeting) {
+  async function mutate(id: string, fn: (m: Meeting) => Meeting, expected?: number) {
     const old = current.current.find((m) => m.id === id);
-    if (!old) return;
-    const next = { ...fn(old), updatedAt: Date.now() };
+    if (!old || (expected !== undefined && expected !== old.updatedAt)) throw new ConflictError();
+    const next = { ...fn(old), updatedAt: Math.max(Date.now(), old.updatedAt + 1) };
     publish(current.current.map((m) => (m.id === id ? next : m)));
     savePending.current++;
-    const operation = queue.current.then(async () => {
-      await saveMeeting(next);
-    });
+    const operation = queue.current.then(() => saveMeeting(next, old.updatedAt));
     queue.current = operation.catch(() => {});
     try {
       await operation;
-    } catch {
-      if (current.current.find((m) => m.id === id) === next)
+    } catch (error) {
+      if (current.current.find((m) => m.id === id)?.updatedAt === next.updatedAt)
         publish(current.current.map((m) => (m.id === id ? old : m)));
-      notify('Speichern fehlgeschlagen. Prüfe den freien Gerätespeicher.');
-      throw new Error('Nicht gespeichert');
+      notify(
+        error instanceof ConflictError
+          ? error.message
+          : 'Speichern fehlgeschlagen. Prüfe den freien Gerätespeicher.',
+        'error',
+      );
+      throw error;
     } finally {
       savePending.current--;
+      if (savePending.current === 0) {
+        const list = await allMeetings();
+        if (savePending.current === 0) publish(list);
+      }
     }
   }
   async function changeSettings(next: Settings) {
     try {
-      await saveSettings(next);
-      setSettings(next);
+      await saveSettings(next, settings);
+      setSettings(await getSettings());
     } catch {
       notify('Einstellungen konnten nicht gespeichert werden.');
     }
@@ -237,14 +321,12 @@ export default function App() {
     await requestPersistence();
   }
   function navigate(next: Page) {
-    setPage(next);
-    setSelected(null);
+    go({ page: next, selected: null, tab: 'transcript' });
     setQuery('');
     setProcessError('');
   }
   function open(m: Meeting) {
-    setSelected(m.id);
-    setTab('transcript');
+    go({ page, selected: m.id, tab: 'transcript' });
     setQuestion('');
     setAnswer(null);
     setPlayhead(0);
@@ -267,8 +349,10 @@ export default function App() {
       title: 'Gespräch umbenennen',
       fields: [{ key: 'title', label: 'Titel', value: m.title, max: 300 }],
       save: async (values) => {
+        if (current.current.find((item) => item.id === m.id)?.updatedAt !== m.updatedAt)
+          throw new ConflictError();
         if (!values.title.trim()) throw new Error('Bitte gib einen Titel ein.');
-        await mutate(m.id, (old) => ({ ...old, title: values.title.trim() }));
+        await mutate(m.id, (old) => ({ ...old, title: values.title.trim() }), m.updatedAt);
         notify('Titel gespeichert');
       },
     });
@@ -292,6 +376,8 @@ export default function App() {
         },
       ],
       save: async (values) => {
+        if (current.current.find((item) => item.id === m.id)?.updatedAt !== m.updatedAt)
+          throw new ConflictError();
         const start = Number(values.start);
         if (!values.text.trim()) throw new Error('Bitte gib einen Text ein.');
         if (!Number.isFinite(start) || start < 0 || start > Math.max(m.duration, 3600))
@@ -333,7 +419,9 @@ export default function App() {
       title: 'Eigene Notizen',
       fields: [{ key: 'notes', label: 'Notizen', value: m.notes, multiline: true }],
       save: async (v) => {
-        await mutate(m.id, (old) => ({ ...old, notes: v.notes }));
+        if (current.current.find((item) => item.id === m.id)?.updatedAt !== m.updatedAt)
+          throw new ConflictError();
+        await mutate(m.id, (old) => ({ ...old, notes: v.notes }), m.updatedAt);
         notify('Notizen gespeichert');
       },
     });
@@ -358,14 +446,49 @@ export default function App() {
       fields: [{ key: 'name', label: 'Ordnername', value: '', max: 100 }],
       save: async (v) => {
         const name = v.name.trim();
-        if (!name || settings.folders.includes(name))
+        if (
+          !name ||
+          settings.folders.some((f) => f.toLocaleLowerCase('de') === name.toLocaleLowerCase('de'))
+        )
           throw new Error('Bitte wähle einen neuen, eindeutigen Namen.');
         const next = { ...settings, folders: [...settings.folders, name] };
-        await saveSettings(next);
-        setSettings(next);
+        await saveSettings(next, settings);
+        setSettings(await getSettings());
         notify('Ordner angelegt');
       },
     });
+  }
+  function renameFolder(name: string) {
+    setEditing({
+      title: 'Ordner umbenennen',
+      fields: [{ key: 'name', label: 'Ordnername', value: name, max: 100 }],
+      save: async (values) => {
+        await queue.current;
+        await changeFolder(name, values.name);
+        publish(await allMeetings());
+        setSettings(await getSettings());
+        if (folder === name) setFolder(values.name.trim().normalize('NFC'));
+        notify('Ordner und Gesprächszuordnungen aktualisiert', 'success');
+      },
+    });
+  }
+  async function deleteFolder(name: string) {
+    if (
+      !confirm(
+        `Ordner „${name}“ entfernen? Alle Gespräche bleiben erhalten und werden „Ohne Ordner“ zugeordnet.`,
+      )
+    )
+      return;
+    try {
+      await queue.current;
+      await changeFolder(name, null);
+      publish(await allMeetings());
+      setSettings(await getSettings());
+      if (folder === name) setFolder('');
+      notify('Ordner entfernt. Deine Gespräche bleiben erhalten.', 'success');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Ordner konnte nicht entfernt werden.', 'error');
+    }
   }
   async function importAudio(file: File) {
     setImporting(false);
@@ -382,7 +505,7 @@ export default function App() {
       const decoded = await decodeAudio(file);
       const m = {
         ...newMeeting(file.name.replace(/\.[^.]+$/, '').slice(0, 300)),
-        audio: new Blob([file], { type: file.type || 'audio/mp4' }),
+        audio: new Blob([file], { type: audioMimeType(file.type, file.name) }),
         duration: decoded.duration,
       };
       await add(m);
@@ -443,12 +566,7 @@ export default function App() {
         const message = event.data;
         if (message.type === 'status') setProcessMessage(message.text);
         if (message.type === 'error') {
-          const text = String(message.message);
-          setProcessError(
-            /fetch|network|403|404|download/i.test(text)
-              ? 'Das Sprachmodell konnte nicht geladen werden. Prüfe die Internetverbindung und den Zugriff auf huggingface.co. Bereits gespeicherte Aufnahmen bleiben erhalten.'
-              : `Transkription nicht möglich: ${text.slice(0, 220)}. Versuche eine kürzere Aufnahme oder einen neueren Browser.`,
-          );
+          setProcessError(transcriptionError(String(message.message), navigator.onLine));
           setProcessing(null);
           w.terminate();
         }
@@ -491,7 +609,7 @@ export default function App() {
               e instanceof Error ? e.message : 'Transkript konnte nicht gespeichert werden.',
             );
           } finally {
-            setProcessing(null);
+            if (job === transcriptionJob.current) setProcessing(null);
             w.terminate();
           }
         }
@@ -502,11 +620,11 @@ export default function App() {
           language: settings.language,
           assets: {
             mjs: new URL(
-              `${import.meta.env.BASE_URL}ort/ort-wasm-simd-threaded.mjs`,
+              `${import.meta.env.BASE_URL}ort/${__ORT_VERSION__}/ort-wasm-simd-threaded.mjs`,
               location.origin,
             ).href,
             wasm: new URL(
-              `${import.meta.env.BASE_URL}ort/ort-wasm-simd-threaded.wasm`,
+              `${import.meta.env.BASE_URL}ort/${__ORT_VERSION__}/ort-wasm-simd-threaded.wasm`,
               location.origin,
             ).href,
           },
@@ -514,6 +632,7 @@ export default function App() {
         [samples.buffer],
       );
     } catch (e) {
+      if (job !== transcriptionJob.current) return;
       setProcessError(e instanceof Error ? e.message : 'Audio konnte nicht verarbeitet werden.');
       setProcessing(null);
     }
@@ -525,15 +644,22 @@ export default function App() {
     setProcessing(null);
     notify('Transkription abgebrochen. Die Aufnahme bleibt gespeichert.');
   }
-  async function doBackup() {
+  async function doBackup(password?: string) {
     if (working) return;
     setWorking(true);
     try {
-      const blob = await backup(current.current, settings);
-      download(blob, `Murmur-Sicherung-${new Date().toISOString().slice(0, 10)}.zip`);
+      await queue.current;
+      const blob = await backup(await allMeetings(), await getSettings());
+      const output = password ? await encryptBackup(blob, password) : blob;
+      download(
+        output,
+        `Murmur-Sicherung-${new Date().toISOString().slice(0, 10)}.${password ? 'murmur' : 'zip'}`,
+      );
+      setEncryptedExport(false);
       notify('Vollständige Sicherung zum Download bereit');
     } catch (e) {
-      notify(e instanceof Error ? e.message : 'Sicherung fehlgeschlagen.');
+      notify(e instanceof Error ? e.message : 'Sicherung fehlgeschlagen.', 'error');
+      throw e;
     } finally {
       setWorking(false);
     }
@@ -575,7 +701,7 @@ export default function App() {
     if (!confirm(`„${m.title}“ in den Papierkorb verschieben?`)) return;
     try {
       await mutate(m.id, (old) => ({ ...old, deletedAt: Date.now() }));
-      setSelected(null);
+      closeMeeting();
       notify('Im Papierkorb · jederzeit wiederherstellbar');
     } catch {}
   }
@@ -588,12 +714,11 @@ export default function App() {
     .filter((m) => (page === 'trash' ? !!m.deletedAt : !m.deletedAt))
     .filter((m) => page !== 'starred' || m.starred)
     .filter((m) => page !== 'folders' || !folder || m.folder === folder)
-    .filter(
-      (m) =>
-        !query ||
-        `${m.title} ${transcript(m)} ${m.notes} ${m.folder} ${m.tasks.map((t) => t.text).join(' ')}`
-          .toLocaleLowerCase('de')
-          .includes(query.toLocaleLowerCase('de')),
+    .filter((m) =>
+      matchesSearch(
+        `${m.title} ${transcript(m)} ${m.notes} ${m.folder} ${m.tasks.map((t) => t.text).join(' ')}`,
+        query,
+      ),
     )
     .sort((a, b) =>
       order === 'oldest'
@@ -796,9 +921,9 @@ export default function App() {
             </div>
           ) : meeting ? (
             <>
-              <button className="text-button back" onClick={() => setSelected(null)}>
+              <button className="text-button back" onClick={() => closeMeeting()}>
                 <ArrowLeft size={17} />
-                Alle Gespräche
+                Zurück
               </button>
               <div className="detail-heading">
                 <div>
@@ -884,7 +1009,7 @@ export default function App() {
                       try {
                         await removeMeeting(meeting.id);
                         publish(current.current.filter((m) => m.id !== meeting.id));
-                        setSelected(null);
+                        closeMeeting();
                         notify('Endgültig gelöscht');
                       } catch {
                         notify('Löschen fehlgeschlagen');
@@ -940,7 +1065,32 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <div className="detail-tabs" role="tablist" aria-label="Gesprächsansicht">
+              <div
+                className="detail-tabs"
+                role="tablist"
+                aria-label="Gesprächsansicht"
+                onKeyDown={(event) => {
+                  const buttons = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role=tab]'),
+                  );
+                  const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                  const target =
+                    event.key === 'ArrowRight'
+                      ? (index + 1) % buttons.length
+                      : event.key === 'ArrowLeft'
+                        ? (index + buttons.length - 1) % buttons.length
+                        : event.key === 'Home'
+                          ? 0
+                          : event.key === 'End'
+                            ? buttons.length - 1
+                            : -1;
+                  if (target >= 0) {
+                    event.preventDefault();
+                    buttons[target].focus();
+                    buttons[target].click();
+                  }
+                }}
+              >
                 {(
                   [
                     ['transcript', 'Transkript', FileText],
@@ -955,6 +1105,7 @@ export default function App() {
                     id={`tab-${key}`}
                     role="tab"
                     aria-selected={tab === key}
+                    tabIndex={tab === key ? 0 : -1}
                     aria-controls="detail-panel"
                     className={tab === key ? 'active' : ''}
                     onClick={() => setTab(key)}
@@ -1327,8 +1478,9 @@ export default function App() {
                     <span>
                       <strong>Lokales Whisper erlauben</strong>
                       <small>
-                        Beim ersten Start lädt Hugging Face das Modell (rund 45 MB). Der Anbieter
-                        sieht deine IP und den Modellabruf, aber erhält kein Audio und keinen Text.
+                        Beim ersten Start lädt Hugging Face das Modell (rund 45 MB). Dazu kommen
+                        rund 14 MB Browserlaufzeit aus dieser App. Der Anbieter sieht deine IP und
+                        den Modellabruf, aber erhält kein Audio und keinen Text.
                       </small>
                     </span>
                     <input
@@ -1412,9 +1564,17 @@ export default function App() {
                   </p>
                   <div className="stack-buttons">
                     <button
+                      className="primary"
+                      disabled={working}
+                      onClick={() => setEncryptedExport(true)}
+                    >
+                      <BackupLock size={18} />
+                      Passwortgeschützte Sicherung
+                    </button>
+                    <button
                       className="secondary"
                       disabled={working}
-                      onClick={() => void doBackup()}
+                      onClick={() => void doBackup().catch(() => {})}
                     >
                       <Download size={18} />
                       Vollständige Sicherung exportieren
@@ -1445,9 +1605,49 @@ export default function App() {
                   <p className="small-text muted">
                     ZIP mit Originalaudio, Transkripten, Notizen, Aufgaben und Ordnerzuordnungen.
                     Sprache und Ordner werden mitgesichert. Die Modellfreigabe bleibt
-                    gerätespezifisch. Sicherungen sind nicht verschlüsselt: bewahre sie geschützt
-                    auf.
+                    gerätespezifisch. Wähle für vertrauliche Gespräche die passwortgeschützte
+                    Sicherung. Der normale ZIP-Export ist unverschlüsselt.
                   </p>
+                </section>
+                <section className="settings-card">
+                  <div className="settings-card-title">
+                    <Folder />
+                    <h2>Ordner verwalten</h2>
+                  </div>
+                  <p>
+                    Umbenennen aktualisiert auch die zugeordneten Gespräche. Beim Entfernen eines
+                    Ordners bleiben alle Gespräche erhalten.
+                  </p>
+                  <div className="folder-management">
+                    {[
+                      ...new Set([
+                        ...settings.folders,
+                        ...meetings.map((m) => m.folder).filter(Boolean),
+                      ]),
+                    ].map((name) => (
+                      <div key={name}>
+                        <span>{name}</span>
+                        <button
+                          className="icon-button"
+                          aria-label={`Ordner ${name} umbenennen`}
+                          onClick={() => renameFolder(name)}
+                        >
+                          <Pencil size={18} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          aria-label={`Ordner ${name} entfernen`}
+                          onClick={() => void deleteFolder(name)}
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button className="text-button" onClick={addFolder}>
+                    <FolderPlus size={17} />
+                    Neuer Ordner
+                  </button>
                 </section>
                 <section className="settings-card">
                   <div className="settings-card-title">
@@ -1476,7 +1676,7 @@ export default function App() {
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <AudioLines />
-                    <h2>Murmur 1.0</h2>
+                    <h2>Murmur 1.1</h2>
                   </div>
                   <p>
                     Ein unabhängiges Gesprächsnotizbuch, inspiriert von Transkriptions-Apps. Kein
@@ -1679,7 +1879,7 @@ export default function App() {
                   <label className="search-field">
                     <Search size={18} />
                     <input
-                      placeholder="Gespräche und Inhalte durchsuchen"
+                      placeholder="Gespräche durchsuchen"
                       aria-label="Gespräche durchsuchen"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
@@ -1818,13 +2018,19 @@ export default function App() {
         </div>
       )}
       {toast && (
-        <div className="toast" role="status">
-          <CircleCheck size={18} />
-          <span>{toast}</span>
+        <div className={`toast ${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'}>
+          {toast.kind === 'error' ? (
+            <CircleAlert size={18} />
+          ) : toast.kind === 'success' ? (
+            <CircleCheck size={18} />
+          ) : (
+            <Info size={18} />
+          )}
+          <span>{toast.message}</span>
           <button
             className="icon-button"
             aria-label="Hinweis schliessen"
-            onClick={() => setToast('')}
+            onClick={() => setToast(null)}
           >
             <X size={15} />
           </button>
@@ -1843,20 +2049,46 @@ export default function App() {
         hidden
         ref={restoreFile}
         type="file"
-        accept=".zip,application/zip"
+        accept=".zip,.murmur,application/zip,application/octet-stream"
         onChange={(e) => {
-          if (e.target.files?.[0]) void restore(e.target.files[0]);
+          if (e.target.files?.[0]) {
+            const file = e.target.files[0];
+            void isEncryptedBackup(file).then((encrypted) =>
+              encrypted ? setEncryptedImport(file) : restore(file),
+            );
+          }
         }}
       />
       {recording && (
         <Recorder
           onCancel={() => setRecording(false)}
-          onComplete={(m) => {
+          onComplete={(m, reason) => {
             publish([m, ...current.current.filter((item) => item.id !== m.id)]);
             setRecording(false);
             open(m);
-            notify('Aufnahme gespeichert');
+            notify(reason || 'Aufnahme gespeichert', reason ? 'info' : 'success');
             void requestPersistence();
+          }}
+        />
+      )}
+      {encryptedExport && (
+        <PasswordDialog
+          mode="export"
+          onClose={() => setEncryptedExport(false)}
+          onSubmit={(password) => doBackup(password)}
+        />
+      )}
+      {encryptedImport && (
+        <PasswordDialog
+          mode="import"
+          onClose={() => {
+            setEncryptedImport(null);
+            if (restoreFile.current) restoreFile.current.value = '';
+          }}
+          onSubmit={async (password) => {
+            const file = await decryptBackup(encryptedImport, password);
+            setEncryptedImport(null);
+            await restore(file);
           }}
         />
       )}
@@ -1903,7 +2135,16 @@ export default function App() {
           </button>
         </Modal>
       )}
-      {editing && <Editor key={editing.title} edit={editing} onClose={() => setEditing(null)} />}
+      {editing && (
+        <Editor
+          key={editing.title}
+          edit={editing}
+          onClose={() => setEditing(null)}
+          onDirty={(dirty) => {
+            editorDirty.current = dirty;
+          }}
+        />
+      )}
       {consentFor && (
         <Modal title="Deine Stimme bleibt hier." onClose={() => setConsentFor(null)}>
           <div className="consent-icon">
@@ -1917,8 +2158,8 @@ export default function App() {
             <p>
               <Download size={18} />
               <span>
-                Einmaliger Modelldownload von Hugging Face, rund 45 MB. Dabei sieht der Anbieter
-                deine IP-Adresse.
+                Einmaliger Modelldownload von Hugging Face, rund 45 MB, plus rund 14 MB
+                Browserlaufzeit aus dieser App. Dabei sieht der Anbieter deine IP-Adresse.
               </span>
             </p>
             <p>
@@ -1951,8 +2192,8 @@ export default function App() {
                 const id = consentFor;
                 try {
                   const next = { ...settings, consent: true };
-                  await saveSettings(next);
-                  setSettings(next);
+                  await saveSettings(next, settings);
+                  setSettings(await getSettings());
                   setConsentFor(null);
                   await startTranscription(id, true);
                 } catch {
@@ -2014,22 +2255,7 @@ export default function App() {
                 {m.audio && (
                   <button
                     className="secondary"
-                    onClick={() =>
-                      finish(
-                        m.audio!,
-                        m.audio!.type.includes('mp4')
-                          ? 'm4a'
-                          : m.audio!.type.includes('mpeg')
-                            ? 'mp3'
-                            : m.audio!.type.includes('wav')
-                              ? 'wav'
-                              : m.audio!.type.includes('ogg')
-                                ? 'ogg'
-                                : m.audio!.type.includes('flac')
-                                  ? 'flac'
-                                  : 'webm',
-                      )
-                    }
+                    onClick={() => finish(m.audio!, audioExtension(m.audio!.type))}
                   >
                     <Headphones size={18} />
                     Originalaudio herunterladen
@@ -2193,13 +2419,25 @@ function Empty({
     </div>
   );
 }
-function Editor({ edit, onClose }: { edit: Edit; onClose: () => void }) {
+function Editor({
+  edit,
+  onClose,
+  onDirty,
+}: {
+  edit: Edit;
+  onClose: () => void;
+  onDirty: (dirty: boolean) => void;
+}) {
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(edit.fields.map((f) => [f.key, f.value])),
   );
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const dirty = edit.fields.some((f) => values[f.key] !== f.value);
+  useEffect(() => {
+    onDirty(dirty);
+    return () => onDirty(false);
+  }, [dirty, onDirty]);
   const close = () => {
     if (!saving && (!dirty || confirm('Ungespeicherte Änderungen verwerfen?'))) onClose();
   };
@@ -2253,9 +2491,24 @@ function Editor({ edit, onClose }: { edit: Edit; onClose: () => void }) {
           ))}
         </div>
         {error && (
-          <p role="alert" className="error-box">
-            {error}
-          </p>
+          <div role="alert" className="error-box">
+            <span>{error}</span>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(Object.values(values).join('\n'))
+                  .catch(() =>
+                    setError(
+                      'Kopieren nicht erlaubt. Bitte markiere und kopiere deine Eingabe manuell.',
+                    ),
+                  )
+              }
+            >
+              Eingaben kopieren
+            </button>
+          </div>
         )}
         <div className="button-row">
           <button type="button" className="secondary" onClick={close} disabled={saving}>

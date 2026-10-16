@@ -18,10 +18,10 @@ self.onmessage = async (event) => {
         dtype: 'q8',
         revision: '5332fcc35e32a33b86612b9a57a89be7906102b1',
         progress_callback: (p: any) => {
-          if (p.status === 'progress')
+          if (p.status === 'progress_total')
             self.postMessage({
               type: 'status',
-              text: `Sprachmodell: ${p.file.split('/').pop()} · ${Math.round(p.progress)} %`,
+              text: `Sprachmodell wird geladen · ${Math.max(0, Math.min(100, Math.round(p.progress)))} %`,
             });
         },
       });
