@@ -23,7 +23,7 @@ export default defineConfig({
         name: 'Murmur · Gesprächsnotizen',
         short_name: 'Murmur',
         lang: 'de',
-        description: 'Dein privates Gesprächsnotizbuch',
+        description: 'Gesprächsnotizen mit lokaler und optionaler Online-Erkennung',
         theme_color: '#111315',
         background_color: '#111315',
         display: 'standalone',

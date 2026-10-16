@@ -71,7 +71,11 @@ describe('belegte Textanalyse und Exporte', () => {
 });
 describe('vollständige Sicherungen', () => {
   it('erhält Audio, Korrekturen, Notizen, Aufgaben, Ordner und Papierkorb exakt', async () => {
-    const original = { ...meeting, deletedAt: 300 };
+    const original: Meeting = {
+      ...meeting,
+      deletedAt: 300,
+      transcriptionSource: 'cloud-whisper-large-v3',
+    };
     const archive = await backup([original]);
     const {
       meetings: [restored],

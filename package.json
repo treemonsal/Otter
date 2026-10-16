@@ -1,6 +1,6 @@
 {
   "name": "murmur-notes",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
     "test:e2e": "playwright test",
     "check": "npm run build && npm test && npm run test:e2e",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
-    "test:model": "node scripts/test-model.mjs"
+    "test:model": "node scripts/test-model.mjs",
+    "test:cloud": "node scripts/test-cloud.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",

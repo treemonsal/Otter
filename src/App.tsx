@@ -61,7 +61,9 @@ import { changeFolder, subscribeChanges, ConflictError } from './db';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './encryption';
 import { PasswordDialog } from './PasswordDialog';
 import { transcriptionError } from './transcription-errors';
+import { transcribeCloud, CLOUD_MAX_SECONDS } from './cloud-transcription';
 import { matchesSearch } from './analysis';
+import { CloudOption, CloudConsent, CloudSettings } from './CloudTranscription';
 import { Info, CircleAlert, LockKeyhole as BackupLock } from 'lucide-react';
 type Edit = {
   title: string;
@@ -117,6 +119,8 @@ export default function App() {
   const [recording, setRecording] = useState(false);
   const [importing, setImporting] = useState(false);
   const [consentFor, setConsentFor] = useState<string | null>(null);
+  const [cloudFor, setCloudFor] = useState<string | null>(null);
+  const cloudRequest = useRef<AbortController | null>(null);
   const [exportFor, setExportFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Edit | null>(null);
   const [install, setInstall] = useState(false);
@@ -127,6 +131,7 @@ export default function App() {
     id: string;
     segments: Segment[];
     duration: number;
+    source: Meeting['transcriptionSource'];
   } | null>(null);
   const [working, setWorking] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
@@ -173,6 +178,7 @@ export default function App() {
     setEditing(null);
     setImporting(false);
     setConsentFor(null);
+    setCloudFor(null);
     setExportFor(null);
     setInstall(false);
     setEncryptedExport(false);
@@ -201,6 +207,8 @@ export default function App() {
     window.addEventListener('murmur-update', update);
     return () => {
       alive.current = false;
+      cloudRequest.current?.abort();
+      worker.current?.terminate();
       window.removeEventListener('online', connectivity);
       window.removeEventListener('offline', connectivity);
       window.removeEventListener('murmur-update', update);
@@ -522,6 +530,84 @@ export default function App() {
       if (uploadFile.current) uploadFile.current.value = '';
     }
   }
+  async function storeTranscription(
+    id: string,
+    revision: number,
+    segments: Segment[],
+    duration: number,
+    source: Meeting['transcriptionSource'],
+  ) {
+    const latest = current.current.find((item) => item.id === id);
+    if (!latest) return;
+    const conflict = { id, segments, duration, source };
+    if (latest.revision !== revision) {
+      setTranscriptionConflict(conflict);
+      return;
+    }
+    try {
+      await mutate(id, (old) => ({
+        ...old,
+        duration,
+        segments,
+        transcriptionSource: source,
+        revision: old.revision + 1,
+      }));
+      notify('Transkript gespeichert · bitte auf Fehler prüfen');
+    } catch (error) {
+      if (error instanceof ConflictError) setTranscriptionConflict(conflict);
+      else throw error;
+    }
+  }
+  async function startCloudTranscription(id: string) {
+    const m = current.current.find((item) => item.id === id);
+    if (!m?.audio || processing) return;
+    if (!navigator.onLine) {
+      notify('Für die Online-Verarbeitung brauchst du Internet.');
+      return;
+    }
+    if (m.duration > CLOUD_MAX_SECONDS) {
+      notify(
+        'Online sind bis zu 5 Minuten möglich. Nutze für längere Aufnahmen die lokale Transkription.',
+      );
+      return;
+    }
+    if (
+      m.segments.length &&
+      !confirm(
+        'Das Online-Ergebnis ersetzt das vorhandene Transkript und seine Zeitmarken durch einen Textblock. Notizen, Aufgaben und Originalaudio bleiben erhalten. Fortfahren?',
+      )
+    )
+      return;
+    const job = ++transcriptionJob.current;
+    const controller = new AbortController();
+    cloudRequest.current = controller;
+    setProcessing(id);
+    setProcessError('');
+    setProcessMessage('Audio für Whisper large v3 vorbereiten …');
+    try {
+      const { samples, duration } = await decodeAudio(m.audio);
+      if (!alive.current || job !== transcriptionJob.current) return;
+      const text = await transcribeCloud(samples, controller.signal, (status) => {
+        if (job === transcriptionJob.current) setProcessMessage(status);
+      });
+      if (!alive.current || job !== transcriptionJob.current) return;
+      await storeTranscription(
+        id,
+        m.revision,
+        [{ id: crypto.randomUUID(), start: 0, end: duration, text, speaker: '' }],
+        duration,
+        'cloud-whisper-large-v3',
+      );
+    } catch (error) {
+      if (job === transcriptionJob.current && alive.current)
+        setProcessError(
+          error instanceof Error ? error.message : 'Online-Verarbeitung fehlgeschlagen.',
+        );
+    } finally {
+      if (job === transcriptionJob.current && alive.current) setProcessing(null);
+      if (cloudRequest.current === controller) cloudRequest.current = null;
+    }
+  }
   async function startTranscription(id: string, consent = settings.consent) {
     const m = current.current.find((m) => m.id === id);
     if (!m?.audio) return;
@@ -591,19 +677,7 @@ export default function App() {
               throw new Error(
                 'Keine Sprache erkannt. Prüfe die Aufnahme und die eingestellte Sprache.',
               );
-            const latest = current.current.find((item) => item.id === id);
-            if (!latest) return;
-            if (latest.revision !== revision) {
-              setTranscriptionConflict({ id, segments, duration });
-            } else {
-              await mutate(id, (old) => ({
-                ...old,
-                duration,
-                segments,
-                revision: old.revision + 1,
-              }));
-              notify('Transkript gespeichert · bitte auf Fehler prüfen');
-            }
+            await storeTranscription(id, revision, segments, duration, 'local-whisper-tiny');
           } catch (e) {
             setProcessError(
               e instanceof Error ? e.message : 'Transkript konnte nicht gespeichert werden.',
@@ -638,11 +712,18 @@ export default function App() {
     }
   }
   function cancelTranscription() {
+    const wasOnline = !!cloudRequest.current;
     transcriptionJob.current++;
+    cloudRequest.current?.abort();
+    cloudRequest.current = null;
     worker.current?.terminate();
     worker.current = null;
     setProcessing(null);
-    notify('Transkription abgebrochen. Die Aufnahme bleibt gespeichert.');
+    notify(
+      wasOnline
+        ? 'Online-Verbindung abgebrochen. Die Aufnahme bleibt gespeichert. Bereits gesendetes Audio kann beim Anbieter weiterverarbeitet werden.'
+        : 'Transkription abgebrochen. Die Aufnahme bleibt gespeichert.',
+    );
   }
   async function doBackup(password?: string) {
     if (working) return;
@@ -880,8 +961,8 @@ export default function App() {
           <div className="private-badge">
             <ShieldCheck size={20} />
             <div>
-              <strong>Nur auf deinem Gerät</strong>
-              <span>Privat. Ohne Konto.</span>
+              <strong>Deine Gespräche</strong>
+              <span>Ohne Konto. Mit Online-Option.</span>
             </div>
           </div>
         </div>
@@ -1136,6 +1217,21 @@ export default function App() {
                         Text ergänzen
                       </button>
                     </div>
+                    {meeting.audio && !meeting.deletedAt && (
+                      <CloudOption
+                        duration={meeting.duration}
+                        busy={!!processing}
+                        online={online}
+                        onStart={() => setCloudFor(meeting.id)}
+                      />
+                    )}
+                    {meeting.transcriptionSource && meeting.segments.length > 0 && (
+                      <p className="transcription-source">
+                        {meeting.transcriptionSource === 'cloud-whisper-large-v3'
+                          ? 'Basis: Whisper large v3 · online verarbeitet · ein Textblock ohne einzelne Zeitmarken. Sprecher manuell zuordnen.'
+                          : 'Basis: Whisper tiny · auf diesem Gerät verarbeitet.'}
+                      </p>
+                    )}
                     {!meeting.segments.length ? (
                       <div className="empty-state transcript-empty">
                         <span className="empty-icon">
@@ -1146,8 +1242,8 @@ export default function App() {
                         </h3>
                         <p>
                           {meeting.audio
-                            ? 'Whisper erstellt dein Transkript direkt auf diesem Gerät. Kein Upload, kein Abo. Je nach Gerät kann das einige Minuten dauern.'
-                            : 'Ergänze ein Transkript oder deine Gesprächsnotizen. Alle Inhalte bleiben privat auf diesem Gerät.'}
+                            ? 'Whisper tiny erstellt dein Transkript direkt auf diesem Gerät. Ohne Upload. Je nach Gerät kann das einige Minuten dauern.'
+                            : 'Ergänze ein Transkript oder deine Gesprächsnotizen. Sie werden auf diesem Gerät gespeichert.'}
                         </p>
                         {meeting.audio ? (
                           <button
@@ -1447,7 +1543,7 @@ export default function App() {
               <div className="detail-footer">
                 <span>
                   <ShieldCheck size={14} />
-                  Privat auf diesem Gerät gespeichert
+                  Auf diesem Gerät gespeichert
                 </span>
                 {!meeting.deletedAt && (
                   <button className="text-button danger" onClick={() => void trash(meeting)}>
@@ -1462,7 +1558,7 @@ export default function App() {
               <PageHeading
                 eyebrow="DEIN RAUM"
                 title="Einstellungen"
-                text="Keine Anmeldung. Keine Cloud mit deinen Aufnahmen."
+                text="Ohne Konto. Lokal arbeiten oder stärkeres Online-Modell nutzen."
               />
               <div className="settings-grid">
                 <section className="settings-card">
@@ -1471,8 +1567,9 @@ export default function App() {
                     <h2>Privatsphäre & Spracherkennung</h2>
                   </div>
                   <p>
-                    Audio, Transkripte und Notizen werden ausschliesslich im lokalen
-                    Browser-Speicher abgelegt. Keine Analyse-Tracker und kein eigener Server.
+                    Deine Gespräche werden im Browser gespeichert. Die lokale Erkennung verarbeitet
+                    Audio auf deinem Gerät. Nur wenn du „Online transkribieren“ startest, wird die
+                    gewählte Aufnahme an Hugging Face gesendet. Keine Analyse-Tracker.
                   </p>
                   <label className="toggle-row">
                     <span>
@@ -1488,7 +1585,7 @@ export default function App() {
                       checked={settings.consent}
                       onChange={(e) => {
                         const consent = e.target.checked;
-                        if (!consent && processing) cancelTranscription();
+                        if (!consent && processing && !cloudRequest.current) cancelTranscription();
                         void changeSettings({ ...settings, consent });
                       }}
                     />
@@ -1540,6 +1637,7 @@ export default function App() {
                     Sprachmodell vom Gerät entfernen
                   </button>
                 </section>
+                <CloudSettings />
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <HardDrive />
@@ -1656,8 +1754,9 @@ export default function App() {
                   </div>
                   <p>
                     Installiere Murmur für ein eigenes App-Fenster. Nach dem ersten vollständigen
-                    Laden sind gespeicherte Gespräche und Aufnahmen offline nutzbar. Transkription
-                    benötigt zusätzlich das vollständig geladene Sprachmodell.
+                    Laden sind gespeicherte Gespräche und Aufnahmen offline nutzbar. Die lokale
+                    Transkription benötigt das vollständig geladene Sprachmodell. Die
+                    Online-Erkennung benötigt Internet.
                   </p>
                   <button className="secondary" onClick={() => setInstall(true)}>
                     <Plus size={17} />
@@ -1676,7 +1775,7 @@ export default function App() {
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <AudioLines />
-                    <h2>Murmur 1.1</h2>
+                    <h2>Murmur 1.2</h2>
                   </div>
                   <p>
                     Ein unabhängiges Gesprächsnotizbuch, inspiriert von Transkriptions-Apps. Kein
@@ -2095,7 +2194,8 @@ export default function App() {
       {importing && (
         <Modal title="Gespräch hinzufügen" onClose={() => setImporting(false)}>
           <p className="muted modal-intro">
-            Dein Audio bleibt auf diesem Gerät. Keine Anmeldung, kein Upload.
+            Import und Aufnahme speichern dein Audio auf diesem Gerät. Online-Verarbeitung startest
+            du anschliessend selbst.
           </p>
           <button
             className="import-option"
@@ -2142,6 +2242,17 @@ export default function App() {
           onClose={() => setEditing(null)}
           onDirty={(dirty) => {
             editorDirty.current = dirty;
+          }}
+        />
+      )}
+      {cloudFor && (
+        <CloudConsent
+          disabled={!!processing || !online}
+          onClose={() => setCloudFor(null)}
+          onStart={() => {
+            const id = cloudFor;
+            setCloudFor(null);
+            void startCloudTranscription(id);
           }}
         />
       )}
@@ -2335,6 +2446,7 @@ export default function App() {
                     segments: transcriptionConflict.segments,
                     revision: old.revision + 1,
                     duration: transcriptionConflict.duration,
+                    transcriptionSource: transcriptionConflict.source,
                   }));
                   setTranscriptionConflict(null);
                   notify('Neues Transkript übernommen');

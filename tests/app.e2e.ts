@@ -448,3 +448,187 @@ test('Speicherfehler rollen sichtbare Änderungen zurück und zeigen keinen Erfo
   );
   await expect(page.locator('.segment-body')).toContainText('3000 Franken');
 });
+
+const cloudHost = 'https://hf-audio-whisper-large-v3.hf.space';
+async function cloudAudio(page: Page) {
+  await page
+    .locator('input[type=file][accept^="audio"]')
+    .setInputFiles({ name: 'Vertraulicher Titel.wav', mimeType: 'audio/wav', buffer: wav() });
+  await expect(page.locator('audio')).toBeVisible();
+}
+async function sendCloud(page: Page) {
+  await page.getByRole('button', { name: 'Online transkribieren', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('Hugging Face');
+  await page.getByRole('button', { name: 'Audio senden & starten' }).click();
+}
+
+test('Online sendet erst nach Start nur das gewählte Audio und erhält das Original im Backup', async ({
+  page,
+}) => {
+  const requests: { path: string; body: string }[] = [];
+  await page.route(`${cloudHost}/**`, async (route) => {
+    const request = route.request();
+    requests.push({ path: new URL(request.url()).pathname, body: request.postData() || '' });
+    const path = new URL(request.url()).pathname;
+    await route.fulfill({
+      status: 200,
+      contentType: path.endsWith('test-event') ? 'text/event-stream' : 'application/json',
+      body: path.endsWith('/upload')
+        ? '["/tmp/gradio/audio.wav"]'
+        : path.endsWith('/transcribe')
+          ? '{"event_id":"test-event"}'
+          : 'event: complete\ndata: ["Das Online-Modell erkennt unser Gespräch."]\n\n',
+    });
+  });
+  await cloudAudio(page);
+  const { default: AxeBuilder } = await import('@axe-core/playwright');
+  const scan = () => new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+  expect((await scan()).violations).toEqual([]);
+  expect(requests).toHaveLength(0);
+  await page.getByRole('button', { name: 'Online transkribieren', exact: true }).click();
+  expect((await scan()).violations).toEqual([]);
+  await page.getByRole('button', { name: 'Zurück', exact: true }).last().click();
+  expect(requests).toHaveLength(0);
+  await sendCloud(page);
+  await expect(page.locator('.segment-body p')).toHaveText(
+    'Das Online-Modell erkennt unser Gespräch.',
+  );
+  expect(requests.map((r) => r.path)).toEqual([
+    '/gradio_api/upload',
+    '/gradio_api/call/transcribe',
+    '/gradio_api/call/transcribe/test-event',
+  ]);
+  expect(requests[0].body).toContain('filename="audio.wav"');
+  expect(requests.map((r) => r.body).join('')).not.toContain('Vertraulicher');
+  await expect(page.locator('.transcription-source')).toContainText('online verarbeitet');
+  await page.reload();
+  await expect(page.locator('.transcription-source')).toContainText('Whisper large v3');
+  await page.getByRole('button', { name: 'Exportieren', exact: true }).click();
+  const exported = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Komplettes Gespräch (.zip)', exact: true }).click();
+  const zip = unzipSync(await readFile((await (await exported).path())!));
+  const m = JSON.parse(strFromU8(zip['manifest.json'])).meetings[0];
+  expect(m.transcriptionSource).toBe('cloud-whisper-large-v3');
+  expect(Buffer.from(zip[`audio/${m.id}`])).toEqual(wav());
+  const fresh = await page.context().browser()!.newContext();
+  try {
+    const other = await fresh.newPage();
+    await other.goto('http://127.0.0.1:4173/Otter/');
+    await other.getByRole('button', { name: 'Einstellungen öffnen' }).click();
+    other.once('dialog', (d) => d.accept());
+    await other
+      .locator('input[type=file][accept^=".zip"]')
+      .setInputFiles((await (await exported).path())!);
+    await expect(other.locator('.toast')).toContainText('1 wiederhergestellt');
+    await other.getByRole('button', { name: 'Übersicht', exact: true }).click();
+    await other.locator('.meeting-main').click();
+    await expect(other.locator('.segment-body p')).toHaveText(
+      'Das Online-Modell erkennt unser Gespräch.',
+    );
+    await expect(other.locator('.transcription-source')).toContainText('Whisper large v3');
+  } finally {
+    await fresh.close();
+  }
+});
+
+test('Online-Ausfall, Offline-Modus und Aufnahmelimit lassen lokale Erkennung verfügbar', async ({
+  page,
+  context,
+}) => {
+  await page.route(`${cloudHost}/**`, (route) => route.fulfill({ status: 429, body: 'Limit' }));
+  await cloudAudio(page);
+  await sendCloud(page);
+  await expect(page.locator('.error-box')).toContainText('Nutzungslimit');
+  await expect(page.locator('audio')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Transkription starten', exact: true }),
+  ).toBeEnabled();
+  await context.setOffline(true);
+  await expect(
+    page.getByRole('button', { name: 'Online transkribieren', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: 'Transkription starten', exact: true }),
+  ).toBeEnabled();
+  await context.setOffline(false);
+  await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const request = indexedDB.open('murmur-private');
+      request.onsuccess = () => resolve(request.result);
+    });
+    const tx = db.transaction('meetings', 'readwrite');
+    const records = tx.objectStore('meetings').getAll();
+    records.onsuccess = () =>
+      tx.objectStore('meetings').put({ ...records.result[0], duration: 301 });
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  });
+  await page.reload();
+  await expect(
+    page.getByRole('button', { name: 'Online transkribieren', exact: true }),
+  ).toBeDisabled();
+  await expect(page.locator('.cloud-option')).toContainText('länger als 5 Minuten');
+  await expect(
+    page.getByRole('button', { name: 'Transkription starten', exact: true }),
+  ).toBeEnabled();
+});
+
+test('Späte Online-Antworten überschreiben weder Korrekturen noch abgebrochene Ergebnisse', async ({
+  page,
+}) => {
+  let release: () => void = () => {};
+  let requested = false;
+  await page.route(`${cloudHost}/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/upload')) {
+      await route.fulfill({ json: ['/tmp/gradio/audio.wav'] });
+      return;
+    }
+    if (path.endsWith('/transcribe')) {
+      await route.fulfill({ json: { event_id: 'delayed-event' } });
+      return;
+    }
+    requested = true;
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await route
+      .fulfill({
+        contentType: 'text/event-stream',
+        body: 'event: complete\ndata: ["Neues Online-Ergebnis"]\n\n',
+      })
+      .catch(() => {});
+  });
+  await cloudAudio(page);
+  await sendCloud(page);
+  await expect.poll(() => requested).toBe(true);
+  await page.getByRole('button', { name: 'Text ergänzen', exact: true }).click();
+  await page.getByLabel('Gesprochener Text').fill('Meine Korrektur bleibt.');
+  await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+  release();
+  await expect(
+    page.getByRole('dialog', { name: 'Deine Korrekturen bleiben erhalten.' }),
+  ).toBeVisible();
+  await expect(page.locator('.segment-body p')).toHaveText('Meine Korrektur bleibt.');
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Neues Ergebnis exportieren' }).click();
+  expect(await readFile((await (await downloadEvent).path())!, 'utf8')).toContain(
+    'Neues Online-Ergebnis',
+  );
+  requested = false;
+  page.once('dialog', (d) => d.accept());
+  await sendCloud(page);
+  await expect.poll(() => requested).toBe(true);
+  await page
+    .locator('.processing-banner')
+    .getByRole('button', { name: 'Abbrechen', exact: true })
+    .click();
+  release();
+  await expect(page.locator('.processing-banner')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.segment-body p')).toHaveText('Meine Korrektur bleibt.');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});

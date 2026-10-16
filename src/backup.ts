@@ -89,6 +89,10 @@ async function parseBackup(
     );
     assert(typeof m.starred === 'boolean' && (m.deletedAt === undefined || time(m.deletedAt)));
     assert(
+      m.transcriptionSource === undefined ||
+        ['local-whisper-tiny', 'cloud-whisper-large-v3'].includes(m.transcriptionSource),
+    );
+    assert(
       Array.isArray(m.segments) &&
         m.segments.length <= 50000 &&
         Array.isArray(m.tasks) &&

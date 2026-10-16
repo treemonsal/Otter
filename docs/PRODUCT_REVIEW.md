@@ -1,8 +1,8 @@
 # Kritische Produktbewertung
 
-Stand: 16. Oktober 2026. Bewertet wurden Quellcode, echte Browserabläufe, automatische Zugänglichkeitsprüfungen sowie eine echte Whisper-Sprachprobe. Die Bewertungen sind ein begründetes Produkturteil, kein gemessener Kundenzufriedenheitswert. Es gab weder einen Nutzertest mit mehreren Personen noch einen Test auf einem physischen iPhone.
+Historische Bewertung der lokalen Version 1.1; Ergänzung zu 1.2 am Ende. Stand: 16. Oktober 2026. Bewertet wurden Quellcode, echte Browserabläufe, automatische Zugänglichkeitsprüfungen sowie eine echte Whisper-Sprachprobe. Die Bewertungen sind ein begründetes Produkturteil, kein gemessener Kundenzufriedenheitswert. Es gab weder einen Nutzertest mit mehreren Personen noch einen Test auf einem physischen iPhone.
 
-## Urteil: 7 von 10 nach den Korrekturen
+## Urteil zu Version 1.1: 7 von 10 nach den Korrekturen
 
 Vor der Überarbeitung: **6/10**. Danach: **7/10**. Murmur ist als privates, kostenloses Gesprächsnotizbuch sinnvoll und gut bedienbar. Als vollständiger Ersatz für Otter.ai ist der Funktionsumfang weiterhin zu klein. Die grössten Abzüge entstehen durch die begrenzt belegte Transkriptionsqualität, fehlende automatische Sprechertrennung und die fehlende Abnahme auf echter iPhone-Hardware. Der Datenschutzvorteil gleicht diese Produktlücken nicht vollständig aus.
 
@@ -39,3 +39,13 @@ Die grösste nächste Produktentscheidung betrifft Qualität und Funktionsumfang
 Die ausstehende Hardwareabnahme muss auf echten iPhones erfolgen: Mikrofonfreigabe, Unterbrechung durch Anruf/Sperren, Screen Wake Lock, M4A-Import, Homescreen-Installation, VoiceOver und längere Aufnahmen auf Geräten mit wenig Arbeitsspeicher. Ohne diese Abnahme wäre eine Bewertung von 9 oder 10 nicht seriös.
 
 Automatische WCAG-Prüfungen und Browser-Emulation prüfen wichtige Fehler, aber weder tatsächliche Alltagstauglichkeit noch vollständige Barrierefreiheit. Gleiches gilt für einen einzelnen erfolgreichen Sprachtest: Er bestätigt die Integration, nicht die allgemeine Erkennungsqualität.
+
+## Ergänzung: Version 1.2 mit optionaler Online-Erkennung
+
+Auf ausdrücklichen Wunsch sind nun Audioübertragungen erlaubt. Statt der bisherigen ausschliesslich lokalen Verarbeitung gibt es eine sichtbare Aktion mit **Whisper large v3** beim öffentlichen Hugging-Face-Space `hf-audio/whisper-large-v3`. Keine neuen Kosten oder Zugangsdaten erforderlich. Nur das gewählte Audio wird gesendet; Original und andere Gesprächsdaten bleiben erhalten. Allgemeine Aussagen wie „kein Upload“ wurden dort entfernt, wo sie nun nicht mehr zutreffen. Die lokale Option bleibt erhalten.
+
+Eine echte öffentliche Sprachprobe wurde über den vollständigen mobilen UI-Ablauf erfolgreich auf dem Server erkannt. Das bestätigt die funktionierende Integration, nicht die allgemeine Überlegenheit bei deutschen oder Schweizer Aufnahmen. Anbieterantworten und CORS wurden mit verifiziertem TLS geprüft; im Cloud-Browser vermittelt ein transparenter Testtransport wegen dessen Proxy-Zertifikat.
+
+**Gesamtbewertung weiterhin 7/10.** Es gibt jetzt eine ernsthafte zusätzliche Möglichkeit für bessere Erkennung mit weniger lokaler Rechenlast. Für eine höhere Gesamtbewertung fehlen aber weiterhin vergleichende Sprachtests, echte iPhone-Abnahme und ein zuverlässiger Dienst für längere Besprechungen. Der kostenlose Demo-Dienst kann ausfallen oder Limits setzen; der Online-Modus ist auf 5 Minuten begrenzt und liefert keine einzelnen Zeitmarken. Automatische Sprechertrennung und generative Zusammenfassungen sind weiterhin nicht vorhanden. Diese Grenzen werden vor der Übertragung erklärt. Fehler, Abbruch und konkurrierende Korrekturen sind abgesichert; bereits übertragene Audiodaten kann die App beim Anbieter nicht zurückholen.
+
+Die nächsten substanziellen Schritte bleiben: deutsche/Schweizer Gesprächs-Testfälle mit mehreren Sprechern, zuverlässige Serverkapazität für längere Meetings, echte Sprechertrennung und quellengestützte generative Zusammenfassungen. Dafür werden ein geeigneter Dienst bzw. eigene Infrastruktur und gegebenenfalls separate Zugangsdaten benötigt. Sie sind nicht stillschweigend als vorhanden dargestellt.

@@ -24,6 +24,7 @@ export interface Meeting {
   starred: boolean;
   deletedAt?: number;
   revision: number;
+  transcriptionSource?: 'local-whisper-tiny' | 'cloud-whisper-large-v3';
 }
 export interface Settings {
   consent: boolean;

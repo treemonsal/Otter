@@ -3164,3 +3164,58 @@ button:disabled:hover {
     font-size: 10px;
   }
 }
+.cloud-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  margin: 0 0 24px;
+  border: 1px solid #3a5451;
+  border-radius: 16px;
+  background: #192321;
+}
+.cloud-option > svg {
+  flex-shrink: 0;
+  color: #c5e4d9;
+}
+.cloud-option > div {
+  flex: 1;
+  min-width: 0;
+}
+.cloud-option strong {
+  font-size: 15px;
+}
+.cloud-option p {
+  color: #d1d8d4;
+  font-size: 13px;
+  margin: 8px 0;
+  line-height: 1.6;
+}
+.cloud-option small {
+  display: block;
+  color: #b1beb7;
+  line-height: 1.6;
+}
+.cloud-option button {
+  flex-shrink: 0;
+}
+.transcription-source {
+  color: #b1beb7;
+  font-size: 12px;
+  line-height: 1.7;
+  margin-bottom: 20px;
+}
+@media (max-width: 760px) {
+  .cloud-option {
+    flex-wrap: wrap;
+    padding: 16px;
+    gap: 12px;
+  }
+  .cloud-option > div {
+    flex-basis: calc(100% - 40px);
+  }
+  .cloud-option button {
+    width: 100%;
+    white-space: normal;
+  }
+}
