@@ -1918,8 +1918,10 @@ export default function App() {
                   </div>
                   <p>
                     Deine Gespräche werden im Browser gespeichert. Die lokale Erkennung verarbeitet
-                    Audio auf deinem Gerät. Nur wenn du „Online transkribieren“ startest, wird die
-                    gewählte Aufnahme an Hugging Face gesendet. Keine Analyse-Tracker.
+                    Audio auf deinem Gerät. Die Online-Demo sendet die gewählte Aufnahme an Hugging
+                    Face. Meeting-KI sendet gewähltes Audio oder Transkript an deinen verbundenen
+                    Server. Optionaler Live-Text kann den Sprachdienst von Apple oder Google
+                    verwenden. Du startest diese Übertragungen selbst. Keine Analyse-Tracker.
                   </p>
                   <label className="toggle-row">
                     <span>
@@ -2561,8 +2563,8 @@ export default function App() {
       {importing && (
         <Modal title="Gespräch hinzufügen" onClose={() => setImporting(false)}>
           <p className="muted modal-intro">
-            Import und Aufnahme speichern dein Audio auf diesem Gerät. Online-Verarbeitung startest
-            du anschliessend selbst.
+            Import und Aufnahme speichern dein Audio auf diesem Gerät. Externe Verarbeitung
+            schaltest du selbst zu.
           </p>
           <button
             className="import-option"
@@ -2724,7 +2726,7 @@ export default function App() {
         />
       )}
       {consentFor && (
-        <Modal title="Deine Stimme bleibt hier." onClose={() => setConsentFor(null)}>
+        <Modal title="Auf diesem Gerät erkennen" onClose={() => setConsentFor(null)}>
           <div className="consent-icon">
             <ShieldCheck size={38} />
           </div>

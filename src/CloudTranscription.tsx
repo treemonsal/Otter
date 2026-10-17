@@ -60,8 +60,8 @@ export function CloudSettings() {
       <p className="small-text muted">
         Kostenloser Demo-Dienst mit möglichen Wartezeiten, Ausfällen und Nutzungslimits. Maximal 5
         Minuten je Aufnahme. Sprache automatisch, Text ohne einzelne Zeitmarken und ohne
-        automatische Sprechertrennung. Zusammenfassung und Suche bleiben lokale Textverfahren. Kein
-        eigener Server und kein Abo.
+        automatische Sprechertrennung. Die Demo liefert ausschliesslich Transkripttext. Generative
+        Auswertungen benötigen den Meeting-KI-Dienst. Kein Abo.
       </p>
       <a className="text-button" href={CLOUD_INFO} target="_blank" rel="noreferrer">
         Dienst und Betreiber ansehen
