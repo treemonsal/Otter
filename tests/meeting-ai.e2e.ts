@@ -402,6 +402,7 @@ test('Endgültiges Löschen entfernt auch pausierte KI-Aufträge und ihre lokale
   await expect(page.locator('.error-box')).toBeVisible();
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'In den Papierkorb', exact: true }).click();
+  await page.getByRole('button', { name: 'Übersicht', exact: true }).click();
   await page.getByRole('button', { name: 'Papierkorb', exact: true }).click();
   await page.locator('.meeting-main').click();
   page.once('dialog', (dialog) => dialog.accept());
