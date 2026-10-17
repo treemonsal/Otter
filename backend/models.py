@@ -179,7 +179,7 @@ class Models:
             self.diarizer = sherpa_onnx.OfflineSpeakerDiarization(config)
         return self.diarizer.process(samples).sort_by_start_time()
 
-    def generate(self, messages, schema):
+    def text_model(self):
         if self.llm is None:
             from llama_cpp import Llama
 
@@ -193,7 +193,13 @@ class Models:
                 n_batch=256,
                 verbose=False,
             )
-        return self.llm.create_chat_completion(
+        return self.llm
+
+    def token_count(self, text):
+        return len(self.text_model().tokenize(text.encode("utf-8")))
+
+    def generate(self, messages, schema):
+        return self.text_model().create_chat_completion(
             messages=messages,
             temperature=0,
             max_tokens=2000,

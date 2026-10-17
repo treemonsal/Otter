@@ -236,3 +236,34 @@ def test_single_paragraph_passages_preserve_canonical_source_and_constrain_ids()
     result = create_insights([source], CheckedModel())
     assert result["tasks"][0]["assignee"] == "Timo"
     assert result["tasks"][0]["quote"] in source["text"]
+
+
+def test_analysis_context_budget_counts_unicode_and_metadata_without_losing_the_end():
+    source = {
+        "id": "long-source",
+        "speaker": "Ein langer Sprechername " * 4,
+        "text": "Wort 😊 " * 1500 + "ENDE-MARKER",
+        "start": 0,
+        "end": 1,
+    }
+
+    class BudgetModel:
+        def __init__(self):
+            self.parts = []
+
+        def token_count(self, text):
+            return len(text.encode("utf-8"))
+
+        def generate(self, messages, schema):
+            data = messages[-1]["content"]
+            assert self.token_count(data) <= 4300
+            self.parts.extend(item["text"] for item in json.loads(data)["transcript"])
+            return json.dumps(
+                {"highlights": [], "decisions": [], "questions": [], "tasks": []}
+            )
+
+    model = BudgetModel()
+    create_insights([source], model)
+    assert len(model.parts) > 1
+    assert "".join(model.parts).replace(" ", "") == source["text"].replace(" ", "")
+    assert model.parts[-1].endswith("ENDE-MARKER")

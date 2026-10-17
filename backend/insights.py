@@ -127,23 +127,37 @@ def validate_result(raw, segments):
 
 
 def create_insights(segments, models, progress=lambda _: None):
-    parts, part, size = [], [], 0
+    parts, part = [], []
+
+    def cost(values):
+        model_values = [
+            {**item, "id": f"s{number + 1}"} for number, item in enumerate(values)
+        ]
+        text = json.dumps({"transcript": model_values}, ensure_ascii=False)
+        counter = getattr(models, "token_count", None)
+        return counter(text) if counter else len(text.encode("utf-8"))
+
+    # Count the actual model tokens, including speaker/JSON overhead. Reserve the rest of
+    # the 8192-token context for instructions, the worked example and generated output.
     for segment in segments:
-        # Sentence-sized evidence passages make long manual paragraphs as inspectable as ASR turns.
         passages = re.findall(
             r".+?(?:[.!?](?=\s|$)|$)", segment["text"], flags=re.S
         ) or [segment["text"]]
         for passage in passages:
-            for start in range(0, len(passage), 6000):
-                current = {**segment, "text": passage[start : start + 6000].strip()}
+            pending = [passage]
+            while pending:
+                piece = pending.pop()
+                current = {**segment, "text": piece.strip()}
                 if not current["text"]:
                     continue
-                if part and size + len(current["text"]) > 9000:
+                if cost([current]) > 4300 and len(piece) > 1:
+                    middle = len(piece) // 2
+                    pending.extend([piece[middle:], piece[:middle]])
+                    continue
+                if part and cost(part + [current]) > 4300:
                     parts.append(part)
                     part = []
-                    size = 0
                 part.append(current)
-                size += len(current["text"])
     if part:
         parts.append(part)
     if not parts:

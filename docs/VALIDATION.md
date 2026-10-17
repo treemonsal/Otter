@@ -32,7 +32,7 @@ Keine Garantie für Hintergrundaufnahme oder unbegrenzte Offline-Speicherung. De
 
 ## Ergänzung Version 1.3
 
-- Produktionsbuild und TypeScript: erfolgreich. 26 Daten-/Protokolltests sowie 8 Python-Serverprüfungen. Gepinnte Python-Abhängigkeiten und `pip check` ohne gebrochene Anforderungen.
+- Produktionsbuild und TypeScript: erfolgreich. 26 Daten-/Protokolltests sowie 9 Python-Serverprüfungen. Gepinnte Python-Abhängigkeiten und `pip check` ohne gebrochene Anforderungen.
 - Browserumfang erweitert um Upload-Fortsetzung nach Neuladen ohne doppelte Teile, gesammelte Sprecherkorrektur, kontrollierte belegte KI-Aufgaben mit Verantwortlichen/Datum, veraltete Auswertungen, Live-Rückmeldungen/Markierungen, gegenseitigen Ausschluss paralleler Aufträge, echte Migration von IndexedDB v1 nach v2 sowie Metadatenimport ohne AudioContext-Decodierung und endgültiges Löschen inklusive pausierter Auftragstoken. Vollständiger Umfang: 48 Prüfungen in Desktop- und iPhone-Chromium-Projekten.
 - Echte serverseitige Whisper-small-Erkennung mit der öffentlichen JFK-Probe, neuronale pyannote-/WeSpeaker-Einsprecher- und Vier-Sprecher-Stichproben. Kein vorgegebenes Sprecheranzahl-Argument verwendet.
 - Echte 66-Sekunden-Verarbeitung über mehrere persistierte Blöcke, fortsetzbare Uploadteile und gespeicherte 512-dimensionale Stimmenprototypen erfolgreich. Bekannte Qualitätsabweichung: dieselbe wiederholte historische Stimme wird in zwei Gruppen geteilt. Dies wird im Test ausdrücklich als Qualitätsgrenze gemeldet.
