@@ -48,6 +48,7 @@ test('Transkript, Notizen, Aufgaben und belegte Suche bleiben nach Neustart erha
   await expect(page.locator('.summary-card')).toContainText('3000 Franken');
   await page.getByRole('tab', { name: 'Aufgaben' }).click();
   await page.getByRole('button', { name: 'Aufgabenvorschläge finden' }).click();
+  await page.getByRole('button', { name: 'Ausgewählte Aufgaben übernehmen' }).click();
   await expect(page.locator('.task-row')).toHaveCount(1);
   await page.locator('.task-row input').check();
   await page.getByRole('tab', { name: 'Notizen' }).click();
@@ -457,6 +458,9 @@ async function cloudAudio(page: Page) {
   await expect(page.locator('audio')).toBeVisible();
 }
 async function sendCloud(page: Page) {
+  const start = page.getByRole('button', { name: 'Transkription starten', exact: true });
+  if (await start.count()) await start.click();
+  else await page.getByRole('button', { name: 'Erneut transkribieren', exact: true }).click();
   await page.getByRole('button', { name: 'Online transkribieren', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('Hugging Face');
   await page.getByRole('button', { name: 'Audio senden & starten' }).click();
@@ -485,6 +489,9 @@ test('Online sendet erst nach Start nur das gewählte Audio und erhält das Orig
   const scan = () => new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
   expect((await scan()).violations).toEqual([]);
   expect(requests).toHaveLength(0);
+  const start = page.getByRole('button', { name: 'Transkription starten', exact: true });
+  if (await start.count()) await start.click();
+  else await page.getByRole('button', { name: 'Erneut transkribieren', exact: true }).click();
   await page.getByRole('button', { name: 'Online transkribieren', exact: true }).click();
   expect((await scan()).violations).toEqual([]);
   await page.getByRole('button', { name: 'Zurück', exact: true }).last().click();
@@ -544,12 +551,12 @@ test('Online-Ausfall, Offline-Modus und Aufnahmelimit lassen lokale Erkennung ve
     page.getByRole('button', { name: 'Transkription starten', exact: true }),
   ).toBeEnabled();
   await context.setOffline(true);
+  await page.getByRole('button', { name: 'Transkription starten', exact: true }).click();
   await expect(
     page.getByRole('button', { name: 'Online transkribieren', exact: true }),
   ).toBeDisabled();
-  await expect(
-    page.getByRole('button', { name: 'Transkription starten', exact: true }),
-  ).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Auf diesem Gerät', exact: false })).toBeEnabled();
+  await page.getByRole('button', { name: 'Schliessen', exact: true }).click();
   await context.setOffline(false);
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
@@ -567,13 +574,12 @@ test('Online-Ausfall, Offline-Modus und Aufnahmelimit lassen lokale Erkennung ve
     db.close();
   });
   await page.reload();
+  await page.getByRole('button', { name: 'Transkription starten', exact: true }).click();
   await expect(
     page.getByRole('button', { name: 'Online transkribieren', exact: true }),
   ).toBeDisabled();
-  await expect(page.locator('.cloud-option')).toContainText('länger als 5 Minuten');
-  await expect(
-    page.getByRole('button', { name: 'Transkription starten', exact: true }),
-  ).toBeEnabled();
+  await expect(page.getByRole('dialog')).toContainText('auf 5 Minuten begrenzt');
+  await expect(page.getByRole('button', { name: /Auf diesem Gerät/ })).toBeEnabled();
 });
 
 test('Späte Online-Antworten überschreiben weder Korrekturen noch abgebrochene Ergebnisse', async ({

@@ -50,3 +50,45 @@ export function audioMimeType(type: string, name: string) {
   };
   return types[extension || ''] || type || 'application/octet-stream';
 }
+
+// Metadata avoids decoding an hour of PCM into a phone's memory merely to import it.
+export async function inspectAudio(blob: Blob): Promise<number> {
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const player = new Audio();
+      const url = URL.createObjectURL(blob);
+      const finish = (error?: Error) => {
+        clearTimeout(timer);
+        player.onloadedmetadata = null;
+        player.onerror = null;
+        const duration = player.duration;
+        player.removeAttribute('src');
+        player.load();
+        URL.revokeObjectURL(url);
+        if (error) reject(error);
+        else if (!Number.isFinite(duration))
+          reject(new Error('Keine lesbare Dauer in den Audio-Metadaten.'));
+        else if (duration > 3600)
+          reject(new Error('Bitte verwende Audio mit höchstens 60 Minuten Länge.'));
+        else if (duration < 0.25) reject(new Error('Die Aufnahme ist zu kurz.'));
+        else resolve(duration);
+      };
+      const timer = setTimeout(
+        () => finish(new Error('Audio-Metadaten konnten nicht rechtzeitig gelesen werden.')),
+        10000,
+      );
+      player.preload = 'metadata';
+      player.onloadedmetadata = () => finish();
+      player.onerror = () =>
+        finish(new DOMException('Audioformat konnte nicht gelesen werden.', 'EncodingError'));
+      player.src = url;
+    });
+  } catch (error) {
+    // Some small WebM recordings omit duration metadata. Keep their existing import support.
+    if (error instanceof Error && /60 Minuten|zu kurz/.test(error.message)) throw error;
+    if (blob.size <= 5 * 1024 * 1024) return (await decodeAudio(blob)).duration;
+    throw new Error(
+      'Die Dauer dieser grossen Audiodatei ist nicht lesbar. Verwende MP3, M4A oder WAV mit gültigen Metadaten.',
+    );
+  }
+}

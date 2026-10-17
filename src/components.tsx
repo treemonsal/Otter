@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useId, type ReactNode } from 'react';
-import { X, Pause, Play, Square, Mic, Download } from 'lucide-react';
+import { X, Pause, Play, Square, Mic, Download, BookmarkPlus } from 'lucide-react';
 import { clock } from './analysis';
 import { recorderType, MAX_AUDIO_BYTES, audioExtension } from './audio';
 import { newMeeting, type Meeting } from './types';
 import { saveRecording } from './db';
+import { liveSupported, startLive } from './live-transcription';
 import { download } from './backup';
 export function Wave({ small = false }: { small?: boolean }) {
   return (
@@ -60,7 +61,9 @@ export function Modal({
 export function Recorder({
   onComplete,
   onCancel,
+  language = 'de-CH',
 }: {
+  language?: string;
   onComplete: (m: Meeting, reason?: string) => void;
   onCancel: () => void;
 }) {
@@ -72,6 +75,14 @@ export function Recorder({
   const [level, setLevel] = useState<number | null>(null);
   const [bars, setBars] = useState<number[]>(Array(35).fill(3));
   const [awake, setAwake] = useState(false);
+  const [live, setLive] = useState(false);
+  const [liveText, setLiveText] = useState('');
+  const [liveCount, setLiveCount] = useState(0);
+  const [liveError, setLiveError] = useState('');
+  const [markers, setMarkers] = useState(0);
+  const liveEngine = useRef<{ stop: () => void } | null>(null);
+  const liveWanted = useRef(false);
+  const liveStart = useRef(0);
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const audioRef = useRef<Blob | null>(null);
@@ -93,6 +104,65 @@ export function Recorder({
   latest.current = { onComplete, onCancel };
   const elapsed = () =>
     active.current + (running.current ? (Date.now() - since.current) / 1000 : 0);
+  function beginLive() {
+    liveEngine.current?.stop();
+    setLiveError('');
+    liveWanted.current = true;
+    setLive(true);
+    liveStart.current = elapsed();
+    try {
+      liveEngine.current = startLive(
+        language,
+        (text) => {
+          const end = elapsed();
+          const segments = meeting.current.liveSegments || [];
+          meeting.current = {
+            ...meeting.current,
+            liveSegments: [
+              ...segments,
+              {
+                id: crypto.randomUUID(),
+                text,
+                speaker: '',
+                start: Math.min(liveStart.current, end),
+                end,
+              },
+            ],
+          };
+          liveStart.current = end;
+          setLiveCount(meeting.current.liveSegments!.length);
+          recorder.current?.requestData();
+        },
+        setLiveText,
+        (message) => {
+          setLiveError(message);
+          setLive(false);
+          liveWanted.current = false;
+        },
+      );
+    } catch (error) {
+      setLiveError(error instanceof Error ? error.message : 'Live-Text nicht verfügbar.');
+      setLive(false);
+      liveWanted.current = false;
+    }
+  }
+  function stopLive() {
+    liveEngine.current?.stop();
+    liveEngine.current = null;
+    setLive(false);
+  }
+  function addMarker() {
+    const bookmarks = meeting.current.bookmarks || [];
+    meeting.current = {
+      ...meeting.current,
+      bookmarks: [
+        ...bookmarks,
+        { id: crypto.randomUUID(), start: elapsed(), label: `Markierung ${bookmarks.length + 1}` },
+      ],
+    };
+    setMarkers(meeting.current.bookmarks!.length);
+    recorder.current?.requestData();
+  }
   function freeze() {
     active.current = elapsed();
     running.current = false;
@@ -105,6 +175,8 @@ export function Recorder({
     const rec = recorder.current;
     if (!rec || rec.state === 'inactive') return;
     reason.current = message;
+    liveWanted.current = false;
+    stopLive();
     freeze();
     stopped.current = true;
     setStatus('saving');
@@ -191,7 +263,11 @@ export function Recorder({
           };
           pending = pending
             .then(async () => {
-              meeting.current = await saveRecording(snapshot);
+              meeting.current = {
+                ...(await saveRecording(snapshot)),
+                liveSegments: meeting.current.liveSegments,
+                bookmarks: meeting.current.bookmarks,
+              };
             })
             .catch(() => {
               setError(
@@ -212,6 +288,8 @@ export function Recorder({
           setStatus('saving');
           input.getTracks().forEach((t) => t.stop());
           releaseMeter();
+          liveWanted.current = false;
+          stopLive();
           await pending;
           if (!audioRef.current?.size) {
             setError('Es wurde kein Audio aufgenommen. Bitte prüfe die Mikrofonfreigabe.');
@@ -261,6 +339,8 @@ export function Recorder({
     });
     return () => {
       disposed = true;
+      liveWanted.current = false;
+      liveEngine.current?.stop();
       stream.current?.getTracks().forEach((t) => t.stop());
       releaseMeter();
     };
@@ -282,8 +362,23 @@ export function Recorder({
         event.returnValue = '';
       }
     };
+    const visibility = () => {
+      if (document.visibilityState === 'hidden' && running.current) {
+        setError(
+          'Die App ist im Hintergrund. Mobile Browser können die Aufnahme unterbrechen. Prüfe sie nach deiner Rückkehr.',
+        );
+        liveEngine.current?.stop();
+        if (liveWanted.current) {
+          setLive(false);
+          setLiveError('Live-Text nach Rückkehr erneut starten.');
+          liveWanted.current = false;
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', visibility);
     addEventListener('beforeunload', warn);
     return () => {
+      document.removeEventListener('visibilitychange', visibility);
       clearInterval(timer);
       removeEventListener('beforeunload', warn);
     };
@@ -323,12 +418,14 @@ export function Recorder({
     if (!rec) return;
     if (rec.state === 'recording') {
       freeze();
+      stopLive();
       rec.pause();
       setStatus('paused');
     } else if (rec.state === 'paused') {
       since.current = Date.now();
       running.current = true;
       rec.resume();
+      if (liveWanted.current) beginLive();
       setStatus('recording');
     }
   }
@@ -406,6 +503,46 @@ export function Recorder({
             : 'Lass den Bildschirm eingeschaltet.'}{' '}
           Lass die App im Vordergrund; mobile Browser können Hintergrundaufnahmen unterbrechen.
         </p>
+        {(status === 'recording' || status === 'paused') && (
+          <section className="live-controls">
+            <div className="button-row">
+              <button
+                className="secondary"
+                disabled={status !== 'recording' || !liveSupported()}
+                onClick={() => {
+                  if (live) {
+                    liveWanted.current = false;
+                    stopLive();
+                  } else beginLive();
+                }}
+              >
+                {live ? 'Live-Text stoppen' : 'Live-Text starten'}
+              </button>
+              <button className="secondary" disabled={status !== 'recording'} onClick={addMarker}>
+                <BookmarkPlus size={17} />
+                Stelle markieren{markers ? ` (${markers})` : ''}
+              </button>
+            </div>
+            <p className="small-text muted">
+              {liveSupported()
+                ? 'Optionaler Browser-Sprachdienst: Audio kann an Apple oder Google gehen. Live-Text ist vorläufig; Zeitmarken sind ungefähr.'
+                : 'Live-Text ist in diesem Browser nicht verfügbar. Du kannst aufnehmen und danach transkribieren.'}
+            </p>
+            {liveCount > 0 && (
+              <div className="live-draft" aria-label="Vorläufige Live-Mitschrift">
+                {meeting.current.liveSegments?.slice(-4).map((segment) => (
+                  <p key={segment.id}>{segment.text}</p>
+                ))}
+              </div>
+            )}
+            {liveText && <p className="live-interim">{liveText}</p>}
+            {liveError && (
+              <p className="small-text" role="status">
+                {liveError}
+              </p>
+            )}
+          </section>
+        )}
         {error && (
           <p role="alert" className="error-box">
             {error}

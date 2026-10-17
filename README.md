@@ -2,6 +2,12 @@
 
 Murmur ist eine kostenlose, installierbare Web-App für persönliche Gesprächsnotizen. Eigene Gestaltung, inspiriert von der Funktionskategorie von Otter.ai; keine Verbindung zu Otter.ai.
 
+## Neu in Version 1.3
+
+Ein gemeinsamer Verarbeitungswähler, optionale Live-Mitschrift, Zeitmarkierungen und bestätigte Aufgaben sind integriert. Der zusätzliche **Meeting-KI-Dienst** verarbeitet lange Aufnahmen, trennt Sprecher und erstellt generative Zusammenfassungen mit Belegen. **Für diese Serverfunktionen fehlt noch die öffentliche Bereitstellung:** Die App zeigt sie erst nach Verbindung mit einem eigenen Dienst als nutzbar an. Der kostenlose CPU-Space ist vorbereitet; Entwicklerzugang wird über `MURMUR_HF_TOKEN` in sicheren Umgebungseinstellungen benötigt. Keine Anmeldung oder Zahlungsdaten für App-Nutzer.
+
+[Umsetzung, Hosting, Prüfungen und bekannte Grenzen](docs/MEETING_AI.md). Die bisherige lokale Erkennung und die öffentliche Fünf-Minuten-Demo bleiben verfügbar.
+
 ## Benutzen
 
 Nach der Veröffentlichung: **https://treemonsal.github.io/Otter/**
@@ -9,11 +15,13 @@ Nach der Veröffentlichung: **https://treemonsal.github.io/Otter/**
 Auf dem iPhone in Safari öffnen → Teilen → **Zum Home-Bildschirm** → Hinzufügen. Erst nach erfolgreichem Pages-Deployment ist die Adresse verfügbar. Es ist keine Anmeldung nötig.
 
 - Audio mit tatsächlichem Mikrofonpegel aufnehmen, pausieren und speichern oder Audio importieren (50 MB / 60 Minuten).
-- Originalaudio abspielen; Zeitmarken im Transkript springen zur Aufnahme.
+- Originalaudio abspielen; Zeitmarken im Transkript springen zur Aufnahme. Grosse Importe lesen zuerst Metadaten; PCM-Decodierung erfolgt erst bei lokaler Erkennung oder als Rückfall für kleine Dateien ohne lesbare Dauer.
 - Lokal: Whisper tiny transkribiert nach Freigabe direkt im Browser, ohne Audio-Upload. Deutsch, Englisch, Französisch, Italienisch und automatische Spracherkennung.
 - Neu in 1.2: **Online transkribieren** sendet die ausgewählte Aufnahme an den kostenlosen öffentlichen Hugging-Face-Dienst mit Whisper large v3. Ohne Konto oder API-Schlüssel. Bis 5 Minuten, automatische Sprachwahl, Text ohne einzelne Zeitmarken. Nur der gewählte Start löst eine Übertragung aus; bestehende Aufnahmen werden nicht automatisch hochgeladen.
 - Transkripte korrigieren und Sprecher manuell benennen. Korrekturen während einer laufenden Transkription werden nicht überschrieben.
-- Zentrale Originalstellen, lokale Aufgabenvorschläge und eine belegte Stichwortsuche. Das sind transparente Textverfahren, **kein generativer KI-Chat**.
+- Zentrale Originalstellen, geprüfte Aufgabenvorschläge und belegte Stichwortsuche. Mit verbundenem Meeting-KI-Dienst zusätzlich echte generative Zusammenfassungen, Entscheidungen und offene Fragen mit Originalbelegen. Kein generativer Gesprächs-Chat.
+- Meeting-KI: bis 60 Minuten / 50 MiB, Upload-Fortsetzung, gespeicherte Verarbeitungsblöcke und neuronale Sprechergruppen. Aufgaben mit Verantwortlichen, Termin und Quellenbeleg erst nach Bestätigung übernehmen.
+- Optionaler Live-Text über den Browser-Sprachdienst sowie Zeitmarkierungen während der Aufnahme. Live-Text bleibt vorläufig und kann Audio an Apple oder Google übertragen. Gruppen lassen sich umbenennen und zusammenführen.
 - Eigene Notizen, Aufgaben, Favoriten, Ordnerverwaltung, Suche nach mehreren Begriffen und Papierkorb. Browser-Zurück/Vorwärts und Neuladen behalten Gespräch und Register bei.
 - Export als Text, Markdown, SRT, Originalaudio oder vollständige Sicherung: normal als ZIP oder optional passwortgeschützt als `.murmur`. ZIP-Wiederherstellung ergänzt fehlende IDs; vorhandene Gespräche bleiben unverändert.
 
@@ -29,13 +37,13 @@ Whisper large v3 ist grösser als Whisper tiny und bietet die Möglichkeit besse
 
 Nach vollständigem Laden ist die App-Oberfläche mit den gespeicherten Inhalten offline verfügbar. Offline-Transkription setzt zusätzlich den vollständigen lokalen Modellcache voraus; Online-Erkennung benötigt Internet. Browser können Website-Daten und Modelle entfernen. Regelmässig **Einstellungen → Passwortgeschützte Sicherung** oder **Vollständige Sicherung exportieren** verwenden. ZIP-Dateien sind unverschlüsselt; `.murmur`-Dateien benötigen das zugehörige Passwort. Die Sicherung enthält auch den Papierkorb. Die vollständige Sicherung enthält auch Sprache und Ordnerlisten. Eine Wiederherstellung führt die Ordner zusammen, übernimmt die Sprache und lässt vorhandene Gespräche unverändert. Modellfreigaben bleiben gerätespezifisch. Die Herkunft des Transkripts (lokal/online) bleibt im Gespräch und in der Sicherung erhalten. Ältere ZIP-v1-Sicherungen ohne dieses Feld bleiben kompatibel.
 
-Whisper tiny ist ein kleines Modell: Erkennungsfehler, insbesondere bei Schweizer Dialekt, Hintergrundgeräuschen oder Fachbegriffen, sind möglich. Kein Versprechen einer Qualität wie bei Otter.ai. Keine automatische Sprechertrennung, Meeting-Bots, Teamkonten oder Kalenderintegration. Längere Aufnahmen benötigen viel Arbeitsspeicher und können auf älteren iPhones scheitern. Die App versucht den Bildschirm während der Aufnahme wach zu halten, soweit der Browser Screen Wake Lock unterstützt. App während Aufnahme und Transkription geöffnet und Bildschirm an lassen; Hintergrundaufzeichnung ist durch mobile Browser begrenzt. Aufnahme-Zwischenstände werden etwa alle vier Sekunden gesichert. Parallele Fenster prüfen vor dem Speichern die Datensatzversion; Konflikte überschreiben keine neueren Gesprächsdaten. Bei Änderungen an Ordnern werden alle Zuordnungen atomar aktualisiert. Ein unerwarteter Abbruch kann den letzten Abschnitt verlieren.
+Whisper tiny ist ein kleines Modell: Erkennungsfehler, insbesondere bei Schweizer Dialekt, Hintergrundgeräuschen oder Fachbegriffen, sind möglich. Kein Versprechen einer Qualität wie bei Otter.ai. Automatische Sprechergruppen gibt es im verbundenen Meeting-KI-Dienst; sie können falsch sein und bleiben korrigierbar. Keine Meeting-Bots, Teamkonten oder Kalenderintegration. Längere Aufnahmen benötigen viel Arbeitsspeicher und können auf älteren iPhones scheitern. Die App versucht den Bildschirm während der Aufnahme wach zu halten, soweit der Browser Screen Wake Lock unterstützt. App während Aufnahme und Transkription geöffnet und Bildschirm an lassen; Hintergrundaufzeichnung ist durch mobile Browser begrenzt. Aufnahme-Zwischenstände werden etwa alle vier Sekunden gesichert. Parallele Fenster prüfen vor dem Speichern die Datensatzversion; Konflikte überschreiben keine neueren Gesprächsdaten. Bei Änderungen an Ordnern werden alle Zuordnungen atomar aktualisiert. Ein unerwarteter Abbruch kann den letzten Abschnitt verlieren.
 
 Hole die erforderliche Einwilligung aller Beteiligten ein, bevor du aufnimmst. Browser-Emulation ersetzt keine Abnahme auf einem echten iPhone mit Safari.
 
 ## Entwicklung
 
-Node.js **24** und npm verwenden. Kein Backend, keine Secrets und keine Datenbankinstallation erforderlich.
+Node.js **24** und npm verwenden. Für die bestehende lokale App ist kein Backend nötig. Die neuen Meeting-KI-Funktionen verwenden den Python-3.12-Server unter `backend/`, mit SQLite und offenen CPU-Modellen. Zugangsdaten werden nur für dessen öffentliche Bereitstellung benötigt, nicht für App-Nutzer.
 
 ```sh
 cd /workspace/Otter
@@ -67,7 +75,7 @@ Der zusätzliche Test `npm run test:cloud` prüft die tatsächliche Online-Infer
 
 `.github/workflows/ci.yml` führt Build, Datentests und Browserprüfungen aus. `.github/workflows/pages.yml` baut und veröffentlicht nach erfolgreichen Prüfungen über den kostenlosen GitHub-Pages-Weg. GitHub Pages muss einmalig auf **GitHub Actions** als Quelle eingestellt sein. Ein Push nach `main` löst die Veröffentlichung aus. Keine Repository-Secrets nötig; der Workflow nutzt den kurzlebigen GitHub-Token mit minimalen Berechtigungen.
 
-App-Updates verändern oder leeren IndexedDB nicht. Eine neue Service-Worker-Version wird erst nach Bestätigung in Einstellungen aktiviert; laufende Aufnahmen und Transkriptionen werden dabei geschützt. Vor grösseren Änderungen trotzdem eine ZIP-Sicherung erstellen.
+App-Updates leeren IndexedDB nicht. Version 2 ergänzt den Auftragsspeicher ohne Verlust bestehender Gespräche. Vollständige Sicherungen bewahren die neuen bestätigten Daten; laufende Auftragstoken und Serveradressen bleiben gerätespezifisch. Auswertungen zeigen nach Transkriptänderungen ihren veralteten Stand an. Eine neue Service-Worker-Version wird erst nach Bestätigung in Einstellungen aktiviert; laufende Aufnahmen und Transkriptionen werden dabei geschützt. Vor grösseren Änderungen trotzdem eine ZIP-Sicherung erstellen.
 
 ## Lizenz
 

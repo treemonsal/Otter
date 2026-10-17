@@ -1,14 +1,16 @@
 import { openDB } from 'idb';
 import { defaultSettings, type Meeting, type Settings } from './types';
-const db = openDB('murmur-private', 1, {
+export const db = openDB('murmur-private', 2, {
   upgrade(db) {
-    db.createObjectStore('meetings', { keyPath: 'id' });
-    db.createObjectStore('settings');
+    if (!db.objectStoreNames.contains('meetings'))
+      db.createObjectStore('meetings', { keyPath: 'id' });
+    if (!db.objectStoreNames.contains('settings')) db.createObjectStore('settings');
+    if (!db.objectStoreNames.contains('jobs')) db.createObjectStore('jobs', { keyPath: 'id' });
   },
 });
 const changes =
   typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('murmur-data');
-function changed() {
+export function changed() {
   changes?.postMessage('changed');
 }
 export function subscribeChanges(listener: () => void) {
@@ -46,6 +48,8 @@ export async function saveRecording(snapshot: Meeting): Promise<Meeting> {
     ...(existing || snapshot),
     audio: snapshot.audio,
     duration: snapshot.duration,
+    liveSegments: snapshot.liveSegments,
+    bookmarks: snapshot.bookmarks,
     updatedAt: Math.max(Date.now(), (existing?.updatedAt || 0) + 1),
   };
   await tx.store.put(next);
@@ -54,7 +58,21 @@ export async function saveRecording(snapshot: Meeting): Promise<Meeting> {
   return next;
 }
 export async function removeMeeting(id: string) {
-  await (await db).delete('meetings', id);
+  const tx = (await db).transaction(['meetings', 'jobs'], 'readwrite');
+  let cursor = await tx.objectStore('jobs').openCursor();
+  while (cursor) {
+    if (cursor.value.meetingId === id) {
+      if (cursor.value.owner && cursor.value.leaseUntil > Date.now()) {
+        tx.abort();
+        await tx.done.catch(() => {});
+        throw new Error('Bitte pausiere den laufenden KI-Auftrag vor dem Löschen.');
+      }
+      await cursor.delete();
+    }
+    cursor = await cursor.continue();
+  }
+  await tx.objectStore('meetings').delete(id);
+  await tx.done;
   changed();
 }
 export const getSettings = async (): Promise<Settings> => ({
@@ -69,6 +87,7 @@ export async function saveSettings(settings: Settings, previous?: Settings) {
         ...current,
         ...(settings.consent !== previous.consent ? { consent: settings.consent } : {}),
         ...(settings.language !== previous.language ? { language: settings.language } : {}),
+        ...(settings.serviceUrl !== previous.serviceUrl ? { serviceUrl: settings.serviceUrl } : {}),
         folders: [
           ...new Set([
             ...current.folders.filter(

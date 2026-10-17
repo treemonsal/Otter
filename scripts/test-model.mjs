@@ -123,6 +123,7 @@ try {
   await expect(page.locator('audio')).toBeVisible();
   if (requests.length) throw new Error('External requests occurred before model consent');
   await page.getByRole('button', { name: 'Transkription starten', exact: true }).click();
+  await page.getByRole('button', { name: /Auf diesem Gerät/ }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.getByRole('button', { name: 'Erlauben & starten' }).click();
   let last = '';
@@ -170,6 +171,7 @@ try {
   await context.setOffline(true);
   page.once('dialog', (d) => d.accept());
   await page.getByRole('button', { name: 'Erneut transkribieren' }).click();
+  await page.getByRole('button', { name: /Auf diesem Gerät/ }).click();
   await expect(page.locator('.processing-banner')).toBeVisible();
   await page.getByRole('button', { name: 'Textstelle 1 bearbeiten' }).click();
   await page.getByLabel('Gesprochener Text').fill('Meine manuelle Korrektur bleibt erhalten.');

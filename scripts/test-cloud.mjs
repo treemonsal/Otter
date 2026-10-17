@@ -111,6 +111,7 @@ try {
   await page.locator('input[type=file][accept^="audio"]').setInputFiles(fixture);
   await expect(page.locator('audio')).toBeVisible();
   expect(requests).toHaveLength(0);
+  await page.getByRole('button', { name: 'Transkription starten', exact: true }).click();
   await page.getByRole('button', { name: 'Online transkribieren', exact: true }).click();
   expect(requests).toHaveLength(0);
   await page.getByRole('button', { name: 'Audio senden & starten' }).click();

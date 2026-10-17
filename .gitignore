@@ -8,3 +8,7 @@ test-results/
 !.env.example
 public/ort/
 *.tsbuildinfo
+__pycache__/
+.pytest_cache/
+backend/.venv/
+backend/data/

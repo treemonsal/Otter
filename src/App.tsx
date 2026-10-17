@@ -54,7 +54,7 @@ import {
   toSrt,
 } from './analysis';
 import { backup, readBackup, download, safeName } from './backup';
-import { decodeAudio, MAX_AUDIO_BYTES, audioExtension, audioMimeType } from './audio';
+import { decodeAudio, inspectAudio, MAX_AUDIO_BYTES, audioExtension, audioMimeType } from './audio';
 import { Modal, Recorder, Wave } from './components';
 import { useNavigation, type Page, type Tab } from './navigation';
 import { changeFolder, subscribeChanges, ConflictError } from './db';
@@ -63,10 +63,15 @@ import { PasswordDialog } from './PasswordDialog';
 import { transcriptionError } from './transcription-errors';
 import { transcribeCloud, CLOUD_MAX_SECONDS } from './cloud-transcription';
 import { matchesSearch } from './analysis';
-import { CloudOption, CloudConsent, CloudSettings } from './CloudTranscription';
+import { CloudConsent, CloudSettings } from './CloudTranscription';
+import { ProcessingChoice, ServiceSettings, JobPanel, InsightsPanel, TaskReview } from './AiPanels';
+import { useAiJobs } from './useAiJobs';
+import { newJob, serviceUrl, type AiJob, type JobKind } from './ai-service';
+import type { InsightItem, Task } from './types';
 import { Info, CircleAlert, LockKeyhole as BackupLock } from 'lucide-react';
 type Edit = {
   title: string;
+  description?: string;
   fields: { key: string; label: string; value: string; multiline?: boolean; max?: number }[];
   save: (values: Record<string, string>) => Promise<void>;
 };
@@ -120,6 +125,14 @@ export default function App() {
   const [importing, setImporting] = useState(false);
   const [consentFor, setConsentFor] = useState<string | null>(null);
   const [cloudFor, setCloudFor] = useState<string | null>(null);
+  const [choiceFor, setChoiceFor] = useState<string | null>(null);
+  const [serverConsent, setServerConsent] = useState<{ id: string; kind: JobKind } | null>(null);
+  const [taskReview, setTaskReview] = useState<{
+    id: string;
+    revision: number;
+    items: InsightItem[];
+  } | null>(null);
+  const ai = useAiJobs();
   const cloudRequest = useRef<AbortController | null>(null);
   const [exportFor, setExportFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Edit | null>(null);
@@ -132,6 +145,7 @@ export default function App() {
     segments: Segment[];
     duration: number;
     source: Meeting['transcriptionSource'];
+    jobId?: string;
   } | null>(null);
   const [working, setWorking] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
@@ -179,6 +193,9 @@ export default function App() {
     setImporting(false);
     setConsentFor(null);
     setCloudFor(null);
+    setChoiceFor(null);
+    setServerConsent(null);
+    setTaskReview(null);
     setExportFor(null);
     setInstall(false);
     setEncryptedExport(false);
@@ -192,6 +209,20 @@ export default function App() {
         if (alive.current) {
           publish(list);
           setSettings(s);
+          if (!s.serviceUrl)
+            void fetch(`${import.meta.env.BASE_URL}service.json`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then(async (config) => {
+                if (config?.url && alive.current) {
+                  const url = serviceUrl(config.url);
+                  const latest = await getSettings();
+                  if (!latest.serviceUrl) {
+                    await saveSettings({ ...latest, serviceUrl: url }, latest);
+                    if (alive.current) setSettings(await getSettings());
+                  }
+                }
+              })
+              .catch(() => {});
           setLoaded(true);
         }
       })
@@ -400,6 +431,8 @@ export default function App() {
                       ...s,
                       text: values.text.trim(),
                       speaker: values.speaker.trim(),
+                      speakerUncertain:
+                        values.speaker.trim() === s.speaker ? s.speakerUncertain : false,
                       start,
                       end: Math.max(start, s.end),
                     }
@@ -434,15 +467,72 @@ export default function App() {
       },
     });
   }
+  function editTask(m: Meeting, task: Task) {
+    setEditing({
+      title: 'Aufgabe bearbeiten',
+      fields: [
+        { key: 'text', label: 'Was ist zu tun?', value: task.text, max: 10000 },
+        { key: 'assignee', label: 'Verantwortlich', value: task.assignee || '', max: 120 },
+        { key: 'dueText', label: 'Termin laut Gespräch', value: task.dueText || '', max: 120 },
+        {
+          key: 'dueDate',
+          label: 'Datum (JJJJ-MM-TT, optional)',
+          value: task.dueDate || '',
+          max: 10,
+        },
+      ],
+      save: async (values) => {
+        if (!values.text.trim()) throw new Error('Bitte beschreibe die Aufgabe.');
+        if (
+          values.dueDate &&
+          (!/^\d{4}-\d{2}-\d{2}$/.test(values.dueDate) ||
+            !Number.isFinite(Date.parse(values.dueDate)) ||
+            new Date(values.dueDate).toISOString().slice(0, 10) !== values.dueDate)
+        )
+          throw new Error('Bitte verwende JJJJ-MM-TT.');
+        await mutate(
+          m.id,
+          (old) => ({
+            ...old,
+            tasks: old.tasks.map((item) =>
+              item.id === task.id
+                ? {
+                    ...item,
+                    text: values.text.trim(),
+                    assignee: values.assignee.trim(),
+                    dueText: values.dueText.trim(),
+                    dueDate: values.dueDate,
+                  }
+                : item,
+            ),
+          }),
+          m.updatedAt,
+        );
+      },
+    });
+  }
   function addTask(m: Meeting) {
     setEditing({
       title: 'Aufgabe hinzufügen',
-      fields: [{ key: 'text', label: 'Was ist zu tun?', value: '', max: 10000 }],
+      fields: [
+        { key: 'text', label: 'Was ist zu tun?', value: '', max: 10000 },
+        { key: 'assignee', label: 'Verantwortlich (optional)', value: '', max: 120 },
+        { key: 'dueText', label: 'Termin (optional)', value: '', max: 120 },
+      ],
       save: async (v) => {
         if (!v.text.trim()) throw new Error('Bitte beschreibe die Aufgabe.');
         await mutate(m.id, (old) => ({
           ...old,
-          tasks: [...old.tasks, { id: crypto.randomUUID(), text: v.text.trim(), done: false }],
+          tasks: [
+            ...old.tasks,
+            {
+              id: crypto.randomUUID(),
+              text: v.text.trim(),
+              done: false,
+              assignee: v.assignee.trim(),
+              dueText: v.dueText.trim(),
+            },
+          ],
         }));
         notify('Aufgabe gespeichert');
       },
@@ -510,11 +600,11 @@ export default function App() {
         !/\.(mp3|m4a|mp4|wav|ogg|webm|aac|flac)$/i.test(file.name)
       )
         throw new Error('Bitte wähle eine unterstützte Audiodatei.');
-      const decoded = await decodeAudio(file);
+      const duration = await inspectAudio(file);
       const m = {
         ...newMeeting(file.name.replace(/\.[^.]+$/, '').slice(0, 300)),
         audio: new Blob([file], { type: audioMimeType(file.type, file.name) }),
-        duration: decoded.duration,
+        duration,
       };
       await add(m);
       open(m);
@@ -536,13 +626,14 @@ export default function App() {
     segments: Segment[],
     duration: number,
     source: Meeting['transcriptionSource'],
+    jobId?: string,
   ) {
     const latest = current.current.find((item) => item.id === id);
-    if (!latest) return;
-    const conflict = { id, segments, duration, source };
+    if (!latest) return false;
+    const conflict = { id, segments, duration, source, jobId };
     if (latest.revision !== revision) {
       setTranscriptionConflict(conflict);
-      return;
+      return false;
     }
     try {
       await mutate(id, (old) => ({
@@ -553,10 +644,119 @@ export default function App() {
         revision: old.revision + 1,
       }));
       notify('Transkript gespeichert · bitte auf Fehler prüfen');
+      return true;
     } catch (error) {
-      if (error instanceof ConflictError) setTranscriptionConflict(conflict);
-      else throw error;
+      if (error instanceof ConflictError) {
+        setTranscriptionConflict(conflict);
+        return false;
+      } else throw error;
     }
+  }
+  function source(id: string, target = meeting) {
+    setTab('transcript');
+    const segment = target?.segments.find((s) => s.id === id);
+    if (segment) seek(segment.start);
+    setTimeout(
+      () =>
+        document
+          .getElementById(`segment-${id}`)
+          ?.scrollIntoView({ block: 'center', behavior: 'instant' }),
+      0,
+    );
+  }
+  async function applyAi(job: AiJob) {
+    if (job.kind === 'transcription') {
+      if (
+        await storeTranscription(
+          job.meetingId,
+          job.revision,
+          job.segments,
+          job.duration,
+          'murmur-ai',
+          job.id,
+        )
+      )
+        await ai.discard(job);
+    } else if (job.insights) {
+      await mutate(job.meetingId, (old) => ({ ...old, insights: job.insights }));
+      await ai.discard(job);
+      notify('KI-Auswertung gespeichert · bitte Belege prüfen');
+    }
+  }
+  async function startAi(id: string, kind: JobKind, existing?: AiJob) {
+    const m = current.current.find((item) => item.id === id);
+    if (!m || processing) return;
+    if (!existing && ai.jobs.some((job) => job.id === `${kind}:${id}`)) {
+      notify(
+        'Für dieses Gespräch gibt es bereits einen Auftrag. Bitte nutze Fortsetzen oder verwirf ihn zuerst.',
+      );
+      return;
+    }
+    if (
+      kind === 'transcription' &&
+      !existing &&
+      m.segments.length &&
+      !confirm(
+        'Das neue Transkript ersetzt den vorhandenen Text und seine Sprecherzuordnung. Originalaudio, Notizen und Aufgaben bleiben erhalten. Fortfahren?',
+      )
+    )
+      return;
+    const job = ++transcriptionJob.current;
+    setProcessing(id);
+    setProcessError('');
+    setProcessMessage('KI-Dienst verbinden …');
+    try {
+      const result = await ai.execute(existing || newJob(m, kind, settings), m, setProcessMessage);
+      if (result && job === transcriptionJob.current) await applyAi(result);
+    } catch (error) {
+      if (job === transcriptionJob.current)
+        setProcessError(error instanceof Error ? error.message : 'KI-Verarbeitung unterbrochen.');
+    } finally {
+      if (job === transcriptionJob.current) setProcessing(null);
+    }
+  }
+  function renameSpeaker(m: Meeting, name: string) {
+    setEditing({
+      title: 'Sprecher umbenennen oder zusammenführen',
+      description:
+        'Die Änderung gilt für alle Textstellen dieser Gruppe. Mit einem bereits verwendeten Namen führst du zwei Sprechergruppen zusammen.',
+      fields: [{ key: 'name', label: 'Neuer Sprechername', value: name, max: 100 }],
+      save: async (values) => {
+        if (!values.name.trim()) throw new Error('Bitte gib einen Namen ein.');
+        await mutate(
+          m.id,
+          (old) => ({
+            ...old,
+            revision: old.revision + 1,
+            segments: old.segments.map((segment) =>
+              segment.speaker === name
+                ? { ...segment, speaker: values.name.trim(), speakerUncertain: false }
+                : segment,
+            ),
+          }),
+          m.updatedAt,
+        );
+        notify('Sprecher in allen zugehörigen Textstellen umbenannt');
+      },
+    });
+  }
+  function localTaskReview(m: Meeting) {
+    const existing = new Set(m.tasks.map((t) => t.text));
+    const candidates = proposedTasks(m.segments).filter((text) => !existing.has(text));
+    if (!candidates.length) {
+      notify('Keine neuen Aufgabenhinweise gefunden. Du kannst Aufgaben selbst ergänzen.');
+      return;
+    }
+    setTaskReview({
+      id: m.id,
+      revision: m.revision,
+      items: candidates.map((text) => ({
+        id: crypto.randomUUID(),
+        text,
+        segmentId: m.segments.find((segment) => segment.text.includes(text))!.id,
+        quote: text,
+      })),
+    });
   }
   async function startCloudTranscription(id: string) {
     const m = current.current.find((item) => item.id === id);
@@ -712,6 +912,10 @@ export default function App() {
     }
   }
   function cancelTranscription() {
+    const serviceRunning = ai.jobs.some(
+      (job) => job.meetingId === processing && job.status === 'running',
+    );
+    ai.pause();
     const wasOnline = !!cloudRequest.current;
     transcriptionJob.current++;
     cloudRequest.current?.abort();
@@ -720,9 +924,11 @@ export default function App() {
     worker.current = null;
     setProcessing(null);
     notify(
-      wasOnline
-        ? 'Online-Verbindung abgebrochen. Die Aufnahme bleibt gespeichert. Bereits gesendetes Audio kann beim Anbieter weiterverarbeitet werden.'
-        : 'Transkription abgebrochen. Die Aufnahme bleibt gespeichert.',
+      serviceRunning
+        ? 'KI-Verarbeitung pausiert. Der Zwischenstand bleibt gespeichert; du kannst fortsetzen.'
+        : wasOnline
+          ? 'Online-Verbindung abgebrochen. Die Aufnahme bleibt gespeichert. Bereits gesendetes Audio kann beim Anbieter weiterverarbeitet werden.'
+          : 'Transkription abgebrochen. Die Aufnahme bleibt gespeichert.',
     );
   }
   async function doBackup(password?: string) {
@@ -841,8 +1047,39 @@ export default function App() {
               })).catch(() => {});
             }}
           />
-          <span>{t.text}</span>
+          <span>
+            {t.text}
+            {(t.assignee || t.dueDate || t.dueText) && (
+              <small className="task-meta">
+                {[t.assignee, t.dueDate || t.dueText].filter(Boolean).join(' · ')}
+              </small>
+            )}
+          </span>
         </label>
+        <button
+          className="icon-button"
+          aria-label={`Aufgabe bearbeiten: ${t.text}`}
+          onClick={() => editTask(m, t)}
+        >
+          <Pencil size={15} />
+        </button>
+        {t.segmentId && (
+          <button
+            className="text-button"
+            disabled={
+              t.sourceRevision !== m.revision ||
+              !m.segments.some((segment) => segment.id === t.segmentId)
+            }
+            onClick={() => {
+              if (selected !== m.id) {
+                open(m);
+                setTimeout(() => source(t.segmentId!, m), 0);
+              } else source(t.segmentId!);
+            }}
+          >
+            Beleg
+          </button>
+        )}
         <button
           className="icon-button"
           aria-label={`Aufgabe löschen: ${t.text}`}
@@ -1088,6 +1325,8 @@ export default function App() {
                       )
                         return;
                       try {
+                        for (const job of ai.jobs.filter((item) => item.meetingId === meeting.id))
+                          await ai.discard(job);
                         await removeMeeting(meeting.id);
                         publish(current.current.filter((m) => m.id !== meeting.id));
                         closeMeeting();
@@ -1146,6 +1385,65 @@ export default function App() {
                   </button>
                 </div>
               )}
+              {ai.jobs
+                .filter((job) => job.meetingId === meeting.id)
+                .map((job) => (
+                  <JobPanel
+                    key={job.id}
+                    job={job}
+                    busy={!!processing}
+                    onResume={() => void startAi(meeting.id, job.kind, job)}
+                    onApply={() =>
+                      void applyAi(job).catch((error) =>
+                        notify(
+                          error instanceof Error
+                            ? error.message
+                            : 'Ergebnis konnte nicht übernommen werden.',
+                          'error',
+                        ),
+                      )
+                    }
+                    onDiscard={() => {
+                      if (
+                        confirm(
+                          'Diesen KI-Auftrag und seine Zwischenstände verwerfen? Dein Originalaudio und gespeicherte Gesprächsdaten bleiben erhalten.',
+                        )
+                      )
+                        void ai.discard(job).catch((error) => notify(error.message, 'error'));
+                    }}
+                  />
+                ))}
+              {meeting.bookmarks?.length ? (
+                <div className="bookmarks" aria-label="Markierte Stellen">
+                  {meeting.bookmarks.map((marker) => (
+                    <button
+                      className="secondary compact"
+                      key={marker.id}
+                      onClick={() => seek(marker.start)}
+                    >
+                      {marker.label} · {clock(marker.start)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {meeting.liveSegments?.length && !meeting.segments.length ? (
+                <div className="info-banner">
+                  <span>Eine vorläufige Live-Mitschrift ist gespeichert.</span>
+                  <button
+                    className="text-button"
+                    onClick={() =>
+                      void mutate(meeting.id, (old) => ({
+                        ...old,
+                        segments: old.liveSegments || [],
+                        revision: old.revision + 1,
+                        transcriptionSource: 'browser-live',
+                      })).catch(() => {})
+                    }
+                  >
+                    Live-Text übernehmen
+                  </button>
+                </div>
+              ) : null}
               <div
                 className="detail-tabs"
                 role="tablist"
@@ -1217,19 +1515,15 @@ export default function App() {
                         Text ergänzen
                       </button>
                     </div>
-                    {meeting.audio && !meeting.deletedAt && (
-                      <CloudOption
-                        duration={meeting.duration}
-                        busy={!!processing}
-                        online={online}
-                        onStart={() => setCloudFor(meeting.id)}
-                      />
-                    )}
                     {meeting.transcriptionSource && meeting.segments.length > 0 && (
                       <p className="transcription-source">
                         {meeting.transcriptionSource === 'cloud-whisper-large-v3'
-                          ? 'Basis: Whisper large v3 · online verarbeitet · ein Textblock ohne einzelne Zeitmarken. Sprecher manuell zuordnen.'
-                          : 'Basis: Whisper tiny · auf diesem Gerät verarbeitet.'}
+                          ? 'Basis: Whisper large v3 · online verarbeitet · ein Textblock ohne einzelne Zeitmarken.'
+                          : meeting.transcriptionSource === 'murmur-ai'
+                            ? 'Basis: Meeting-KI · Whisper small mit automatischen Sprechergruppen. Unsichere Zuordnungen bitte prüfen.'
+                            : meeting.transcriptionSource === 'browser-live'
+                              ? 'Vorläufiger Browser-Live-Text · ungefähre Zeitmarken · bitte korrigieren oder aus dem Originalaudio neu erkennen.'
+                              : 'Basis: Whisper tiny · auf diesem Gerät verarbeitet.'}
                       </p>
                     )}
                     {!meeting.segments.length ? (
@@ -1249,7 +1543,7 @@ export default function App() {
                           <button
                             className="primary"
                             disabled={!!processing}
-                            onClick={() => void startTranscription(meeting.id)}
+                            onClick={() => setChoiceFor(meeting.id)}
                           >
                             <AudioLines size={18} />
                             Transkription starten
@@ -1268,6 +1562,28 @@ export default function App() {
                       </div>
                     ) : (
                       <>
+                        {Array.from(
+                          new Set(
+                            meeting.segments.map((segment) => segment.speaker).filter(Boolean),
+                          ),
+                        ).length > 0 && (
+                          <div className="speaker-tools" aria-label="Sprecher bearbeiten">
+                            {Array.from(
+                              new Set(
+                                meeting.segments.map((segment) => segment.speaker).filter(Boolean),
+                              ),
+                            ).map((name) => (
+                              <button
+                                className="secondary compact"
+                                key={name}
+                                onClick={() => renameSpeaker(meeting, name)}
+                              >
+                                <Pencil size={14} />
+                                {name} umbenennen
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         <div className="transcript-list">
                           {meeting.segments.map((s, i) => (
                             <article
@@ -1291,6 +1607,9 @@ export default function App() {
                               <div className="segment-body">
                                 <div>
                                   <strong>{s.speaker || 'Ohne Sprecherzuordnung'}</strong>
+                                  {s.speakerUncertain && (
+                                    <span className="speaker-uncertain">Zuordnung prüfen</span>
+                                  )}
                                   <button
                                     className="icon-button"
                                     aria-label={`Textstelle ${i + 1} bearbeiten`}
@@ -1322,7 +1641,7 @@ export default function App() {
                           <button
                             className="text-button muted"
                             disabled={!!processing}
-                            onClick={() => void startTranscription(meeting.id)}
+                            onClick={() => setChoiceFor(meeting.id)}
                           >
                             <RotateCcw size={15} />
                             Erneut transkribieren
@@ -1336,7 +1655,41 @@ export default function App() {
                   <>
                     <div className="section-heading">
                       <div>
-                        <h2>Die wichtigsten Stellen.</h2>
+                        <h2>Ergebnisse, Entscheidungen und offene Fragen</h2>
+                        <p>Generative KI mit überprüfbaren Belegen aus deinem Transkript.</p>
+                      </div>
+                    </div>
+                    <button
+                      className="primary"
+                      disabled={
+                        !meeting.segments.length || !!processing || !online || !settings.serviceUrl
+                      }
+                      onClick={() => setServerConsent({ id: meeting.id, kind: 'analysis' })}
+                    >
+                      <AudioLines size={17} />
+                      {meeting.insights ? 'KI-Auswertung neu erstellen' : 'Mit KI auswerten'}
+                    </button>
+                    {!settings.serviceUrl && (
+                      <p className="small-text muted">
+                        Für die KI-Auswertung fehlt die Serververbindung.{' '}
+                        <button className="text-button" onClick={() => navigate('settings')}>
+                          KI-Dienst einrichten
+                        </button>
+                      </p>
+                    )}
+                    {meeting.insights && (
+                      <InsightsPanel
+                        insights={meeting.insights}
+                        revision={meeting.revision}
+                        onSource={source}
+                        onTasks={(items) =>
+                          setTaskReview({ id: meeting.id, revision: meeting.revision, items })
+                        }
+                      />
+                    )}
+                    <div className="section-heading">
+                      <div>
+                        <h2>Originalstellen im Überblick</h2>
                         <p>Lokale Textanalyse · Originalzitate statt erfundener Inhalte.</p>
                       </div>
                     </div>
@@ -1376,8 +1729,8 @@ export default function App() {
                     )}
                     <p className="disclosure">
                       <ShieldCheck size={15} />
-                      Automatisch ausgewählte Zitate. Keine generative KI, keine automatische
-                      Sprechererkennung. Bitte prüfe Kontext und Vollständigkeit.
+                      Die Originalstellen werden lokal ausgewählt. Die separate KI-Auswertung oben
+                      formuliert neue Texte; prüfe ihre Belege und den Kontext.
                     </p>
                   </>
                 )}
@@ -1405,35 +1758,32 @@ export default function App() {
                     <button
                       className="secondary"
                       disabled={!meeting.segments.length}
-                      onClick={async () => {
-                        const candidates = proposedTasks(meeting.segments);
-                        const existing = new Set(meeting.tasks.map((t) => t.text));
-                        const fresh = candidates.filter((t) => !existing.has(t));
-                        if (!fresh.length) {
-                          notify(
-                            'Keine neuen Aufgabenhinweise gefunden. Du kannst Aufgaben selbst ergänzen.',
-                          );
-                          return;
-                        }
-                        try {
-                          await mutate(meeting.id, (old) => ({
-                            ...old,
-                            tasks: [
-                              ...old.tasks,
-                              ...fresh.map((text) => ({
-                                id: crypto.randomUUID(),
-                                text,
-                                done: false,
-                              })),
-                            ],
-                          }));
-                          notify(`${fresh.length} Vorschläge ergänzt · bitte prüfen`);
-                        } catch {}
-                      }}
+                      onClick={() => localTaskReview(meeting)}
                     >
                       <ListTodo size={16} />
                       Aufgabenvorschläge finden
                     </button>
+                    {meeting.insights?.tasks.length ? (
+                      <button
+                        className="secondary"
+                        disabled={meeting.insights.revision !== meeting.revision}
+                        onClick={() =>
+                          setTaskReview({
+                            id: meeting.id,
+                            revision: meeting.revision,
+                            items: meeting.insights!.tasks.filter(
+                              (item) =>
+                                !meeting.tasks.some(
+                                  (task) =>
+                                    task.segmentId === item.segmentId && task.quote === item.quote,
+                                ),
+                            ),
+                          })
+                        }
+                      >
+                        KI-Aufgabenvorschläge prüfen
+                      </button>
+                    ) : null}
                     <p className="disclosure">
                       Die lokale Suche erkennt Formulierungen wie „ich werde“ oder „bitte“. Sie kann
                       Aufgaben übersehen und Verbindlichkeit nicht beurteilen.
@@ -1637,6 +1987,13 @@ export default function App() {
                     Sprachmodell vom Gerät entfernen
                   </button>
                 </section>
+                <ServiceSettings
+                  settings={settings}
+                  onSave={async (next) => {
+                    await saveSettings(next, settings);
+                    setSettings(await getSettings());
+                  }}
+                />
                 <CloudSettings />
                 <section className="settings-card">
                   <div className="settings-card-title">
@@ -1775,16 +2132,17 @@ export default function App() {
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <AudioLines />
-                    <h2>Murmur 1.2</h2>
+                    <h2>Murmur 1.3</h2>
                   </div>
                   <p>
                     Ein unabhängiges Gesprächsnotizbuch, inspiriert von Transkriptions-Apps. Kein
                     Produkt von Otter.ai. Kostenlos und ohne Konto.
                   </p>
                   <p className="small-text muted">
-                    Keine automatische Sprechertrennung, Meeting-Bots, Team-Konten oder
-                    geräteübergreifende Synchronisierung. Du bestimmst, was du exportierst und
-                    teilst.
+                    Meeting-KI ergänzt automatische Sprechergruppen und generative Auswertungen,
+                    sobald ein eigener Dienst verbunden ist. Keine Meeting-Bots, Team-Konten oder
+                    automatische Gerätesynchronisierung. Sprechergruppen und KI-Inhalte müssen
+                    geprüft werden.
                   </p>
                   <a
                     className="text-button"
@@ -2160,6 +2518,15 @@ export default function App() {
       />
       {recording && (
         <Recorder
+          language={
+            {
+              german: 'de-CH',
+              english: 'en-US',
+              french: 'fr-CH',
+              italian: 'it-CH',
+              auto: navigator.language,
+            }[settings.language]
+          }
           onCancel={() => setRecording(false)}
           onComplete={(m, reason) => {
             publish([m, ...current.current.filter((item) => item.id !== m.id)]);
@@ -2242,6 +2609,106 @@ export default function App() {
           onClose={() => setEditing(null)}
           onDirty={(dirty) => {
             editorDirty.current = dirty;
+          }}
+        />
+      )}
+      {choiceFor &&
+        (() => {
+          const m = meetings.find((item) => item.id === choiceFor);
+          return m ? (
+            <ProcessingChoice
+              meeting={m}
+              language={settings.language}
+              onLanguage={(language) => void changeSettings({ ...settings, language })}
+              busy={!!processing}
+              online={online}
+              service={settings.serviceUrl}
+              onClose={() => setChoiceFor(null)}
+              onLocal={() => {
+                setChoiceFor(null);
+                void startTranscription(m.id);
+              }}
+              onDemo={() => {
+                setChoiceFor(null);
+                setCloudFor(m.id);
+              }}
+              onServer={() => {
+                setChoiceFor(null);
+                setServerConsent({ id: m.id, kind: 'transcription' });
+              }}
+              onSettings={() => {
+                setChoiceFor(null);
+                navigate('settings');
+              }}
+            />
+          ) : null;
+        })()}
+      {serverConsent && (
+        <Modal
+          title={
+            serverConsent.kind === 'analysis'
+              ? 'Gespräch mit KI auswerten'
+              : 'Sprache und Sprecher erkennen'
+          }
+          onClose={() => setServerConsent(null)}
+        >
+          <p>
+            {serverConsent.kind === 'analysis'
+              ? 'Das Transkript mit Sprecherbezeichnungen wird'
+              : 'Die ausgewählte Originalaufnahme wird'}{' '}
+            an <strong>{settings.serviceUrl ? new URL(settings.serviceUrl).host : ''}</strong>{' '}
+            gesendet. Notizen, Aufgaben und andere Gespräche werden nicht mitgesendet.
+          </p>
+          <p className="small-text muted">
+            Der CPU-Dienst verwendet Whisper small für Sprache, WeSpeaker für anonyme
+            Sprechergruppen und Qwen für generative Auswertungen. Er kann langsam sein oder
+            schlafen. Aufträge und Audio werden nach spätestens 24 Stunden gelöscht. Bereits
+            begonnene Abschnitte können nach einer Pause fertig verarbeitet werden.
+          </p>
+          <div className="button-row">
+            <button className="secondary" onClick={() => setServerConsent(null)}>
+              Zurück
+            </button>
+            <button
+              className="primary"
+              disabled={!online || !!processing}
+              onClick={() => {
+                const request = serverConsent;
+                setServerConsent(null);
+                void startAi(request.id, request.kind);
+              }}
+            >
+              {serverConsent.kind === 'analysis'
+                ? 'Transkript senden & auswerten'
+                : 'Audio senden & verarbeiten'}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {taskReview && (
+        <TaskReview
+          items={taskReview.items}
+          revision={taskReview.revision}
+          onClose={() => setTaskReview(null)}
+          onSave={async (tasks) => {
+            const latest = current.current.find((m) => m.id === taskReview.id);
+            if (!latest || latest.revision !== taskReview.revision)
+              throw new Error(
+                'Das Transkript wurde inzwischen geändert. Bitte Vorschläge neu erstellen.',
+              );
+            await mutate(taskReview.id, (old) => ({
+              ...old,
+              tasks: [
+                ...old.tasks,
+                ...tasks.filter(
+                  (task) =>
+                    !old.tasks.some(
+                      (item) => item.text === task.text && item.segmentId === task.segmentId,
+                    ),
+                ),
+              ],
+            }));
+            notify('Geprüfte Aufgaben übernommen');
           }}
         />
       )}
@@ -2448,6 +2915,10 @@ export default function App() {
                     duration: transcriptionConflict.duration,
                     transcriptionSource: transcriptionConflict.source,
                   }));
+                  if (transcriptionConflict.jobId) {
+                    const job = ai.jobs.find((item) => item.id === transcriptionConflict.jobId);
+                    if (job) await ai.discard(job);
+                  }
                   setTranscriptionConflict(null);
                   notify('Neues Transkript übernommen');
                 } catch {}
@@ -2565,6 +3036,7 @@ function Editor({
   }, [dirty]);
   return (
     <Modal title={edit.title} onClose={close} wide={edit.fields.some((f) => f.multiline)}>
+      {edit.description && <p className="muted">{edit.description}</p>}
       <form
         onSubmit={async (e) => {
           e.preventDefault();

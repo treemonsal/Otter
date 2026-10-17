@@ -1,0 +1,6 @@
+{
+  "name": "speaker-voxceleb.onnx",
+  "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM++_LM.onnx",
+  "sha256": "e197af7e9d473030cf486b3124149a19bf37014d0e4485e4c70c483b0ec10cb2",
+  "model": "WeSpeaker VoxCeleb CAM++ LM, Apache-2.0"
+}

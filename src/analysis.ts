@@ -105,5 +105,5 @@ export function toSrt(segments: Segment[]) {
     .join('\n');
 }
 export function toMarkdown(m: Meeting) {
-  return `# ${m.title}\n\n${dateLabel(m.createdAt)} · ${clock(m.duration)}\n\n## Transkript\n\n${m.segments.map((s) => `[${clock(s.start)}] ${s.speaker ? s.speaker + ': ' : ''}${s.text}`).join('\n\n')}\n\n## Notizen\n\n${m.notes}\n\n## Aufgaben\n\n${m.tasks.map((t) => `- [${t.done ? 'x' : ' '}] ${t.text}`).join('\n')}\n`;
+  return `# ${m.title}\n\n${dateLabel(m.createdAt)} · ${clock(m.duration)}\n\n## Transkript\n\n${m.segments.map((s) => `[${clock(s.start)}] ${s.speaker ? s.speaker + ': ' : ''}${s.text}`).join('\n\n')}\n\n${m.insights ? `## KI-Auswertung${m.insights.revision !== m.revision ? ' (veraltet)' : ''}\n\n${(['highlights', 'decisions', 'questions'] as const).map((key) => m.insights![key].map((item) => `- ${item.text}\n  Beleg: „${item.quote}“`).join('\n')).join('\n\n')}\n\n` : ''}## Notizen\n\n${m.notes}\n\n## Aufgaben\n\n${m.tasks.map((t) => `- [${t.done ? 'x' : ' '}] ${t.text}${t.assignee ? ' · ' + t.assignee : ''}${t.dueDate || t.dueText ? ' · ' + (t.dueDate || t.dueText) : ''}`).join('\n')}\n`;
 }
