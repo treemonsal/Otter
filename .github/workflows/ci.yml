@@ -41,6 +41,6 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-dev.lock
       - run: python -m pip install -r backend/requirements-dev.lock
-      - run: python -m pytest backend/tests -q
-      - run: ruff check backend scripts/deploy-ai-space.py scripts/test-ai-long.py --select F
-      - run: ruff format --check backend scripts/deploy-ai-space.py scripts/test-ai-long.py
+      - run: python -m pytest backend/tests training/tests -q
+      - run: ruff check backend training scripts/deploy-ai-space.py scripts/test-ai-long.py --select F
+      - run: ruff format --check backend training scripts/deploy-ai-space.py scripts/test-ai-long.py

@@ -12,3 +12,6 @@ __pycache__/
 .pytest_cache/
 backend/.venv/
 backend/data/
+training/data/
+training/runs/
+training/.venv/

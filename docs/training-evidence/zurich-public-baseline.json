@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "purpose": "two-public-samples-not-a-benchmark",
+  "trained": false,
+  "model": "Systran/faster-whisper-small",
+  "revision": "536b0662742c02347bc0e980a01041f333bce120",
+  "source": "https://gitlab.inf.ethz.ch/ou-mtc-public/swiss-dial-samples",
+  "license": "CC-BY-NC-4.0",
+  "attribution": "Pelin Dogan-Schonberger, Julian Mader, Thomas Hofmann: SwissDial (2021), arXiv:2103.11401",
+  "target": "standard-de",
+  "scores": {
+    "wer": 0.5714285714285714,
+    "cer": 0.25806451612903225,
+    "words": 28
+  },
+  "examples": [
+    {
+      "id": "ch_zh_1682.wav",
+      "sha256": "2f4f30f60b2c5057d77aae9659aba0f5bfaef325f416543bee6f7d71fe2a75e4",
+      "seconds": 7.6645625,
+      "reference": "Die Schweizer treffen im Final auf Russland, das die Slowakei im anderen Halbfinal mit drei zu zwei nach Penaltyschiessen niederrang.",
+      "hypothesis": "Die Schweizer treffen im Finale auf Russland, wo das Lowakai im anderen Halbfinale mit 3-2 in Bernalte Schiessen besiegt hat."
+    },
+    {
+      "id": "ch_zh_2547.wav",
+      "sha256": "8cd1280e620141e25362d88b8ed191fd7ea79ed057890ed1d380be151747ac5a",
+      "seconds": 2.6198125,
+      "reference": "Blair hatte sich unbemerkt in seinen Rücken geschlichen.",
+      "hypothesis": "Die Player hat sich unbemerkt hinter seinen Rücken geschlichen."
+    }
+  ],
+  "limitations": [
+    "Only two read examples; no generalization claim",
+    "Not a training set or a speaker-independent benchmark",
+    "Reference translations penalize legitimate wording alternatives"
+  ]
+}

@@ -1,0 +1,7 @@
+# Separate Python 3.12 environment; never install into the inference environment.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+transformers==4.57.6
+numpy==2.2.6
+safetensors==0.8.0
+ctranslate2==4.8.3

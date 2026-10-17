@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "purpose": "technical-smoke-only",
+  "base": "openai/whisper-tiny",
+  "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+  "configuration": {
+    "manifest": "corpus.jsonl",
+    "output": "run",
+    "base": "tiny",
+    "steps": 2,
+    "evaluate_every": 2,
+    "accumulate": 1,
+    "learning_rate": 1e-05,
+    "seed": 42,
+    "device": "cpu",
+    "smoke": true
+  },
+  "corpus": {
+    "sha256": "9479c011195ddb93fd0a9890f782ed9679c40d7626fa44b2f702df934a9e32bc",
+    "target": "standard-de",
+    "synthetic": true,
+    "splits": {
+      "train": {
+        "clips": 1,
+        "speakers": 1,
+        "minutes": 0.016666666666666666
+      },
+      "validation": {
+        "clips": 1,
+        "speakers": 1,
+        "minutes": 0.016666666666666666
+      },
+      "test": {
+        "clips": 1,
+        "speakers": 1,
+        "minutes": 0.016666666666666666
+      }
+    }
+  },
+  "baseline_test": {
+    "wer": 1.0,
+    "cer": 0.84,
+    "words": 4
+  },
+  "candidate_test": {
+    "wer": 1.0,
+    "cer": 0.84,
+    "words": 4
+  },
+  "validation": [
+    {
+      "step": 2,
+      "wer": 1.0,
+      "cer": 0.8,
+      "words": 4
+    }
+  ],
+  "losses": [
+    11.979928016662598,
+    10.355253219604492
+  ],
+  "weights_changed": true,
+  "weight_sha256_before": "2a043a75b560e0580f47a494fdd3a7c8949f7e5e1344e4f09e92389517226975",
+  "weight_sha256_after": "39865585677da63859151709ee5b70170958384941995fad3698119cf81f79b1",
+  "gate": {
+    "eligible_for_review": false,
+    "reasons": [
+      "Technical smoke test is never a dialect quality result",
+      "Synthetic fixtures cannot qualify as Zurich speech",
+      "Insufficient independent train coverage",
+      "Insufficient independent validation coverage",
+      "Insufficient independent test coverage",
+      "Less than 5% relative held-out WER improvement"
+    ],
+    "auto_deployed": false
+  },
+  "examples": [
+    {
+      "id": "technical-2",
+      "baseline": "Copyright WDR 2021",
+      "candidate": "Copyright WDR 2021"
+    }
+  ],
+  "limitations": [
+    "Human provenance labels cannot be verified automatically",
+    "Exact duplicate checks do not detect every paraphrase or re-encoding",
+    "Minimum coverage and WER/CER gates do not replace listening tests on real Zurich meetings"
+  ]
+}

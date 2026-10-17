@@ -4,6 +4,8 @@ Murmur ist eine kostenlose, installierbare Web-App für persönliche Gesprächsn
 
 ## Neu in Version 1.3
 
+Für **Zürcher Schweizerdeutsch** gibt es jetzt einen getrennten, technisch geprüften Whisper-Trainingsablauf mit unabhängigen Trainings-/Prüfpersonen und Vergleich zum Basismodell. Ein eigenes Dialektmodell ist noch nicht trainiert oder aktiviert: Es fehlen zugängliche, freigegebene Zürcher Aufnahmen mit korrigierten Transkripten. [Stand, Messungen und Trainingsanleitung](docs/ZURICH_TRAINING.md).
+
 Ein gemeinsamer Verarbeitungswähler, optionale Live-Mitschrift, Zeitmarkierungen und bestätigte Aufgaben sind integriert. Der zusätzliche **Meeting-KI-Dienst** verarbeitet lange Aufnahmen, trennt Sprecher und erstellt generative Zusammenfassungen mit Belegen. **Für diese Serverfunktionen fehlt noch die öffentliche Bereitstellung:** Die App zeigt sie erst nach Verbindung mit einem eigenen Dienst als nutzbar an. Der kostenlose CPU-Space ist vorbereitet; Entwicklerzugang wird über `MURMUR_HF_TOKEN` in sicheren Umgebungseinstellungen benötigt. Keine Anmeldung oder Zahlungsdaten für App-Nutzer.
 
 [Umsetzung, Hosting, Prüfungen und bekannte Grenzen](docs/MEETING_AI.md). Die bisherige lokale Erkennung und die öffentliche Fünf-Minuten-Demo bleiben verfügbar.
